@@ -1,0 +1,2412 @@
+<!--
+  ПОЛИТИЯ — браузерная многопользовательская настольная политическая игра.
+  Один самодостаточный HTML-файл: без сборки, без npm, без сервера.
+
+  Как запустить:
+   - Просто откройте politia.html в браузере, либо разместите файл как
+     статическую страницу (например, включите GitHub Pages для этого
+     репозитория).
+
+  Синхронизация между игроками:
+   - Внутри Claude.ai (как опубликованный артефакт) синхронизация работает
+     "из коробки" через window.storage — общее хранилище между разными
+     устройствами.
+   - Вне Claude (как обычный сайт/файл) такого общего хранилища нет, и игра
+     автоматически переходит на localStorage — то есть комната будет видна
+     только в этом браузере (несколько вкладок на одном устройстве подойдут
+     для тестирования). Чтобы получить настоящую игру между разными
+     устройствами при размещении на GitHub Pages, замените реализацию
+     storageGet/storageSet в файле на вызовы своего бэкенда (Firebase
+     Realtime Database, Supabase и т.п.) — это единственное место в коде,
+     которое трогает хранилище.
+
+  Лицензия: делайте с этим файлом что хотите.
+-->
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ПОЛИТИЯ</title>
+<style>
+  :root{
+    --bg:#0e0c09;
+    --bg2:#1b1712;
+    --bg3:#241f18;
+    --brass:#b3925a;
+    --brass-bright:#d8b978;
+    --brass-dark:#6f5a34;
+    --marble:#eee7d6;
+    --marble-dim:#c9c0aa;
+    --ink:#0e0c09;
+    --crimson:#8f2a24;
+    --crimson-bright:#c33a30;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{
+    margin:0;
+    background:
+      radial-gradient(ellipse at 50% -10%, #241f16 0%, var(--bg) 55%),
+      var(--bg);
+    color:var(--marble);
+    font-family:Georgia, 'Iowan Old Style', 'Times New Roman', serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .display{
+    font-family:Georgia, 'Times New Roman', serif;
+    font-weight:700;
+    font-variant:small-caps;
+    letter-spacing:.14em;
+  }
+  .mono{
+    font-family:ui-monospace,'SF Mono','Courier New',monospace;
+    letter-spacing:.02em;
+  }
+  #root{max-width:1520px;margin:0 auto;padding:18px 16px 60px;position:relative;}
+
+  .masthead{text-align:center;margin-bottom:16px;position:relative;}
+  .seal{
+    width:52px;height:52px;margin:0 auto 6px;
+    border:2px solid var(--brass);border-radius:50%;
+    display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(circle at 35% 30%, #2c2418, #17130d);
+  }
+  .masthead h1{
+    font-size:clamp(24px,4vw,36px);margin:0;color:var(--marble);
+    text-shadow:0 1px 0 #000;
+  }
+  .masthead .tag{
+    font-family:ui-monospace,monospace;font-size:10px;letter-spacing:.28em;
+    text-transform:uppercase;color:var(--brass);margin-top:3px;
+  }
+  .masthead:after{
+    content:"";display:block;width:100px;height:2px;background:var(--brass);
+    margin:10px auto 0;
+  }
+
+  .colonnade{position:relative;padding:0 64px;max-width:900px;margin:0 auto;}
+  .column{position:absolute;top:0;bottom:0;width:44px;}
+  .column.left{left:0;} .column.right{right:0;}
+  @media (max-width:760px){ .colonnade{padding:0;} .column{display:none;} }
+
+  .plaque{
+    background:linear-gradient(180deg,#211c15,#191510);
+    border:1.5px solid var(--brass-dark);
+    border-radius:3px;
+    padding:16px 18px;margin-bottom:14px;
+    box-shadow:inset 0 0 0 1px rgba(179,146,90,.15), 0 6px 18px rgba(0,0,0,.35);
+  }
+  h2.section-title{
+    font-family:Georgia,serif;font-variant:small-caps;letter-spacing:.08em;
+    font-size:17px;margin:0 0 12px;color:var(--brass-bright);
+    display:flex;align-items:center;gap:10px;
+    border-bottom:1px solid var(--brass-dark);padding-bottom:7px;
+  }
+
+  label{display:block;font-family:ui-monospace,monospace;font-size:10px;text-transform:uppercase;
+    letter-spacing:.12em;margin-bottom:5px;color:var(--brass);}
+  input[type=text],select,textarea{
+    width:100%;padding:10px 12px;border:1.5px solid var(--brass-dark);border-radius:2px;
+    font-size:15px;font-family:Georgia,serif;background:#100d09;color:var(--marble);
+  }
+  input[type=text]::placeholder,textarea::placeholder{color:#6b6455;}
+  .notes-area{min-height:150px;resize:vertical;font-size:13px;}
+  .row{display:flex;gap:12px;flex-wrap:wrap;}
+  .row > *{flex:1;min-width:150px;}
+
+  button{
+    font-family:ui-monospace,monospace;font-weight:700;font-size:12px;letter-spacing:.08em;
+    text-transform:uppercase;
+    padding:10px 18px;border:1.5px solid var(--brass);border-radius:2px;
+    background:linear-gradient(180deg,#2b2418,#1a160f);color:var(--brass-bright);cursor:pointer;
+    transition:transform .08s ease, background .15s ease;
+  }
+  button:hover{background:linear-gradient(180deg,#352b1a,#221b10);}
+  button:active{transform:translateY(1px);}
+  button.secondary{background:transparent;color:var(--marble-dim);border-color:#4a4438;}
+  button.danger{background:linear-gradient(180deg,#a9332a,#7a221c);border-color:#e05a4f;color:#fff2ee;}
+  button:disabled{opacity:.3;cursor:not-allowed;transform:none;}
+  .stepper-btn{padding:6px 12px;font-size:14px;}
+
+  .standards-row{display:flex;gap:14px;flex-wrap:wrap;justify-content:center;margin:14px 0 6px;}
+  .standard{
+    width:90px;text-align:center;cursor:pointer;opacity:.55;
+    filter:grayscale(.4);transition:opacity .15s, filter .15s, transform .15s;
+  }
+  .standard:hover{opacity:.85;transform:translateY(-3px);}
+  .standard.selected{opacity:1;filter:none;transform:translateY(-5px);}
+  .standard.selected .flag-shape{stroke:var(--brass-bright);stroke-width:3;}
+  .standard.taken{opacity:.2;filter:grayscale(1);cursor:not-allowed;pointer-events:none;}
+  .standard .flag-shape{stroke:#000;stroke-width:1.5;}
+  .standard .pname{
+    font-family:ui-monospace,monospace;font-size:10px;letter-spacing:.03em;
+    margin-top:4px;color:var(--marble-dim);line-height:1.25;
+  }
+
+  .mini-logo{flex:none;display:inline-block;vertical-align:middle;}
+
+  .players-strip{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px;}
+  .player-chip{
+    border:1.5px solid var(--brass-dark);padding:6px 10px;border-radius:2px;font-size:12px;
+    display:flex;align-items:center;gap:6px;background:#161209;font-family:ui-monospace,monospace;
+    color:var(--marble-dim);
+  }
+  .player-chip.turn{border-color:var(--crimson-bright);color:#ffd9d3;background:#2a1512;}
+  .dot{width:11px;height:11px;border-radius:2px;border:1.5px solid #000;flex:none;}
+
+  .info-bar{
+    display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;
+    background:var(--brass-dark);border:1.5px solid var(--brass-dark);border-radius:3px;
+    overflow:hidden;margin-bottom:14px;
+  }
+  .info-cell{background:#171310;padding:9px 12px;}
+  .info-cell .il{font-family:ui-monospace,monospace;font-size:9px;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--brass);margin-bottom:3px;}
+  .info-cell .iv{font-size:12.5px;color:var(--marble);font-weight:700;display:flex;align-items:center;gap:5px;flex-wrap:wrap;}
+
+  .phase-track{display:flex;gap:6px;margin-bottom:14px;}
+  .phase-step{
+    flex:1;text-align:center;padding:8px 4px;font-size:10px;font-weight:700;
+    border:1.5px solid var(--brass-dark);text-transform:uppercase;letter-spacing:.1em;
+    background:#171310;color:#7c745f;font-family:ui-monospace,monospace;
+  }
+  .phase-step.active{background:var(--crimson);border-color:var(--crimson-bright);color:#fff2ee;}
+
+  .game-grid{display:grid;grid-template-columns:250px 1fr 290px;gap:14px;align-items:start;margin-bottom:14px;}
+  .game-col{display:flex;flex-direction:column;gap:14px;min-width:0;}
+  @media (max-width:1080px){ .game-grid{grid-template-columns:1fr;} }
+
+  .president-panel{padding:12px 16px;}
+
+  .gov-bar-wrap{border:2px solid var(--brass);border-radius:3px;
+    padding:12px;background:linear-gradient(180deg,#211c15,#171208);}
+  .gov-bar-wrap .glabel{font-family:ui-monospace,monospace;font-size:9px;letter-spacing:.15em;color:var(--brass);margin-bottom:8px;}
+  .gov-bar{display:flex;height:26px;border:1.5px solid #000;border-radius:2px;overflow:hidden;}
+  .gov-seg{height:100%;}
+
+  .parliament-wrap{
+    border:2px solid var(--brass);border-radius:3px;padding:14px;
+    background:linear-gradient(180deg,#211c15,#171208);text-align:center;
+  }
+  .parliament-wrap .plabel{font-family:ui-monospace,monospace;font-size:9px;letter-spacing:.15em;color:var(--brass);margin-bottom:2px;}
+  .hemicycle-svg{width:100%;max-width:360px;height:auto;}
+  .parliament-inner{display:flex;gap:18px;align-items:center;justify-content:center;flex-wrap:wrap;}
+  .seat-breakdown{display:flex;flex-direction:column;gap:6px;min-width:160px;text-align:left;}
+  .seat-row{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--marble-dim);}
+  .seat-row b{margin-left:auto;color:var(--marble);}
+
+  .state-wrap{
+    border:2px solid var(--brass);border-radius:3px;padding:14px;
+    background:linear-gradient(180deg,#1c1911,#141109);
+  }
+  .state-wrap .slabel{font-family:ui-monospace,monospace;font-size:9px;letter-spacing:.15em;color:var(--brass);margin-bottom:6px;}
+  .state-svg{width:100%;display:block;margin:0 auto;}
+  .state-legend{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:10px;}
+  .legend-item{display:flex;align-items:center;gap:5px;font-family:ui-monospace,monospace;font-size:10.5px;color:var(--marble-dim);}
+  .legend-dot{width:10px;height:10px;border-radius:50%;border:1px solid #000;}
+  @keyframes personWander{
+    0%{ transform:translate(0,0); }
+    25%{ transform:translate(1.1px,-0.9px); }
+    50%{ transform:translate(-0.9px,1.2px); }
+    75%{ transform:translate(0.9px,0.8px); }
+    100%{ transform:translate(0,0); }
+  }
+
+  .agenda-col{border:1.5px solid var(--brass);border-radius:2px;padding:10px 12px;background:#161209;}
+  .agenda-col h3{margin:0 0 8px;font-size:11.5px;font-family:ui-monospace,monospace;letter-spacing:.06em;
+    color:var(--brass-bright);display:flex;align-items:center;gap:6px;}
+  .agenda-item{display:flex;align-items:flex-start;gap:6px;font-size:11.5px;padding:3px 0;color:var(--marble-dim);}
+  .agenda-item.done{color:#8fbf8c;text-decoration:line-through;opacity:.75;}
+  .agenda-check{flex:none;width:13px;height:13px;border:1.5px solid var(--brass-dark);border-radius:2px;
+    display:flex;align-items:center;justify-content:center;font-size:9px;margin-top:1px;color:#dff2df;}
+  .agenda-item.done .agenda-check{background:#3a5d3a;border-color:#7fae7c;}
+
+  .card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:10px;}
+  .playcard{
+    border-radius:10px;padding:3px;cursor:pointer;position:relative;
+    background:linear-gradient(160deg,var(--brass),var(--brass-dark));
+  }
+  .playcard.rare{
+    background:linear-gradient(160deg,#f0d78c,#a9852f);
+    box-shadow:0 0 14px 2px rgba(240,215,140,.5);
+  }
+  .playcard.rare:before{
+    content:"★ РЕДКАЯ"; position:absolute; top:3px; left:50%; transform:translateX(-50%);
+    font-family:ui-monospace,monospace; font-size:7.5px; letter-spacing:.06em; color:#3a2e0f;
+    background:#f0d78c; padding:1px 5px; border-radius:6px; z-index:1; white-space:nowrap;
+  }
+  .playcard.frozen{ box-shadow:0 0 0 3px #6fa8dc inset, 0 0 10px 2px rgba(111,168,220,.5); }
+  .playcard.disabled{opacity:.35;cursor:not-allowed;}
+  .playcard:hover:not(.disabled){transform:translateY(-3px);}
+  .playcard-inner{
+    border-radius:8px;padding:9px;height:100%;min-height:140px;
+    display:flex;flex-direction:column;gap:5px;padding-top:16px;
+  }
+  .playcard.agitation .playcard-inner{background:linear-gradient(160deg,#26301f,#141a10);}
+  .playcard.discredit .playcard-inner{background:linear-gradient(160deg,#3a1815,#1a0c0a);}
+  .cost-gem{
+    position:absolute;top:-8px;left:-8px;width:28px;height:28px;border-radius:50%;
+    background:radial-gradient(circle at 35% 30%, #4a6fb0, #16233c);
+    border:2px solid #7fa0e0;color:#fff;display:flex;align-items:center;justify-content:center;
+    font-family:ui-monospace,monospace;font-weight:900;font-size:12px;z-index:2;
+  }
+  .freeze-toggle{
+    position:absolute; top:-8px; right:-8px; width:24px; height:24px; border-radius:50%;
+    background:#1c2b3a; border:2px solid #6fa8dc; color:#bcdfff; display:flex; align-items:center;
+    justify-content:center; font-size:12px; cursor:pointer; z-index:2;
+  }
+  .pc-kind{font-family:ui-monospace,monospace;font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--brass-bright);opacity:.85;}
+  .pc-title{font-size:12.5px;font-weight:700;line-height:1.25;flex:1;color:var(--marble);}
+  .pc-bottom{display:flex;justify-content:space-between;align-items:center;}
+  .value-badge{font-family:ui-monospace,monospace;font-weight:900;font-size:14px;}
+  .playcard.agitation .value-badge{color:#8fd18a;}
+  .playcard.discredit .value-badge{color:#e07a72;}
+  .bonus-dots{display:flex;gap:3px;}
+  .bonus-dot{width:9px;height:9px;border-radius:50%;border:1px solid #000;}
+
+  @keyframes cardPlay{
+    0%{ transform:translateY(0) scale(1) rotate(0deg); opacity:1; }
+    55%{ transform:translateY(-16px) scale(1.06) rotate(-3deg); opacity:1; }
+    100%{ transform:translateY(-46px) scale(.68) rotate(9deg); opacity:0; }
+  }
+  .playcard.card-playing{ animation: cardPlay .38s ease forwards; pointer-events:none; }
+
+  .flash-badge{
+    position:fixed; left:50%; top:38%; transform:translate(-50%,0) scale(1);
+    font-family:ui-monospace,monospace; font-weight:900; font-size:30px;
+    text-shadow:0 2px 8px rgba(0,0,0,.65); pointer-events:none; z-index:999;
+    opacity:1; transition:transform 1s ease-out, opacity 1s ease-out;
+  }
+  .flash-badge.rise{ transform:translate(-50%,-80px) scale(1.35); opacity:0; }
+
+  .majority-meter{height:11px;background:#241f18;border:1px solid var(--brass-dark);border-radius:6px;overflow:hidden;margin:10px 0 4px;position:relative;}
+  .majority-fill{height:100%;background:linear-gradient(90deg,var(--brass-dark),var(--brass-bright));transition:width .3s ease;}
+  .gov-form-row{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0;}
+  .gov-chip{
+    display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:14px;
+    border:1.5px solid var(--brass-dark);font-size:12px;cursor:pointer;background:#161209;color:var(--marble-dim);
+  }
+  .gov-chip.locked{opacity:.85;cursor:default;border-color:var(--brass);color:var(--marble);}
+  .gov-chip.readonly{cursor:default;}
+  .gov-stepper-list{display:flex;flex-direction:column;gap:8px;margin:12px 0;}
+  .gov-stepper-row{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--marble-dim);}
+
+  .proposal-list{display:flex;flex-direction:column;gap:6px;max-height:280px;overflow-y:auto;margin:8px 0;}
+  .proposal-row{
+    border:1.5px solid var(--brass-dark); border-radius:2px; padding:9px 12px; cursor:pointer;
+    background:#161209; color:var(--marble-dim); font-size:13px; display:flex; flex-direction:column; gap:2px;
+  }
+  .proposal-row:hover{border-color:var(--brass);}
+  .proposal-row.needed{border-color:#5c8a5c;}
+  .proposal-row.selected{border-color:var(--brass-bright); background:#241d10; color:var(--marble);}
+  .proposal-row.needed.selected{border-color:#8fd18a; background:#1c2a1c;}
+  .proposal-group{font-family:ui-monospace,monospace;font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--brass);}
+  .proposal-desc{font-size:11px;opacity:.75;}
+
+  .vote-panel{border:2px solid var(--brass);border-radius:3px;padding:16px;background:linear-gradient(180deg,#241d10,#171208);}
+  .vote-kind{font-family:ui-monospace,monospace;font-size:10px;letter-spacing:.12em;color:var(--brass);text-transform:uppercase;}
+  .vote-title{font-size:16px;font-weight:700;margin:4px 0 12px;color:var(--marble);}
+  .vote-status-row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;}
+  .vote-status-chip{display:flex;align-items:center;gap:6px;padding:5px 10px;border:1.5px solid var(--brass-dark);
+    border-radius:2px;font-size:11px;font-family:ui-monospace,monospace;color:var(--marble-dim);background:#161209;}
+  .vote-status-chip.voted{border-color:#7fae7c;color:#cfe8cf;}
+  .vote-buttons{display:flex;gap:10px;flex-wrap:wrap;}
+  .vote-buttons button{flex:1;font-size:12px;padding:13px 8px;min-width:100px;}
+  .vote-yes{background:linear-gradient(180deg,#3a6b3a,#25452a)!important;border-color:#7fae7c!important;color:#eafcea!important;}
+  .vote-no{background:linear-gradient(180deg,#8a3128,#5c1f1a)!important;border-color:#e05a4f!important;color:#ffe9e6!important;}
+  .vote-abstain{background:linear-gradient(180deg,#4a453a,#2c2820)!important;border-color:#9a8f6f!important;color:#e8e0cc!important;}
+
+  .log{
+    background:#100d09;border:1.5px solid var(--brass-dark);padding:10px 12px;
+    max-height:220px;overflow-y:auto;font-size:12px;line-height:1.6;
+    font-family:ui-monospace,monospace;color:var(--marble-dim);
+  }
+  .log div{border-bottom:1px dashed #3a3326;padding:3px 0;}
+  .log div:last-child{border-bottom:none;}
+
+  .waiting{text-align:center;padding:36px 10px;font-size:14px;opacity:.6;font-style:italic;color:var(--marble-dim);}
+  .small{font-size:12px;opacity:.75;color:var(--marble-dim);}
+  .center{text-align:center;}
+  .mt8{margin-top:8px;} .mt16{margin-top:16px;}
+  .flex-between{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;}
+  .law-item{border:1.5px solid var(--brass-dark);padding:9px 11px;margin-bottom:7px;background:#161209;border-radius:2px;}
+  .badge{
+    display:inline-block;font-family:ui-monospace,monospace;font-size:10px;font-weight:900;padding:3px 8px;
+    border:1.5px solid var(--brass);border-radius:10px;text-transform:uppercase;color:var(--brass-bright);
+    letter-spacing:.06em;
+  }
+  .error-plaque{border-color:var(--crimson-bright);color:#ffd9d3;}
+
+  .reveal-wrap{max-width:640px;margin:60px auto;text-align:center;}
+  .reveal-kicker{font-family:ui-monospace,monospace;font-size:11px;letter-spacing:.2em;color:var(--brass);text-transform:uppercase;}
+  .reveal-title{font-size:22px;margin:8px 0 26px;color:var(--marble);}
+  .reveal-bar-row{display:flex;align-items:center;gap:10px;margin:12px 0;}
+  .reveal-name{width:150px;text-align:right;font-size:12px;flex:none;}
+  .reveal-track{flex:1;height:22px;background:#1c1911;border:1.5px solid var(--brass-dark);position:relative;}
+  .reveal-fill{height:100%;width:0%;}
+  .reveal-count{width:80px;font-family:ui-monospace,monospace;font-size:12px;flex:none;}
+  .reveal-verdict{margin-top:26px;font-size:26px;font-weight:900;letter-spacing:.05em;opacity:0;transition:opacity .5s;font-family:ui-monospace,monospace;}
+  .reveal-verdict.show{opacity:1;}
+  .reveal-verdict.pass{color:#8fd18a;}
+  .reveal-verdict.fail{color:#e07a72;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+/* ============================== DATA ============================== */
+
+const PARTIES = {
+  ч: { name:'Анархисты',        color:'#2b2b2b' },
+  к: { name:'Коммунисты',       color:'#a12a24' },
+  з: { name:'Социал-демократы', color:'#2f7d46' },
+  ж: { name:'Либералы',         color:'#e3b23c' },
+  с: { name:'Консерваторы',     color:'#28456f' },
+  н: { name:'Националисты',     color:'#7a4a28' },
+};
+const PARTY_KEYS = Object.keys(PARTIES);
+
+const AGITATION_CARDS = [
+  {id:'a1',  name:'Обещания введения прогрессивных налогов', cost:0, value:1, bonus:['к','ч']},
+  {id:'a2',  name:'Обещания поддержки бизнеса',               cost:0, value:1, bonus:['с','н','ж']},
+  {id:'a3',  name:'Обещания поддержки семьи',                 cost:0, value:1, bonus:['н','с']},
+  {id:'a4',  name:'Обещания поддержки рабочих',                cost:0, value:1, bonus:['ч','к']},
+  {id:'a5',  name:'Митинг в малом населенном пункте',          cost:2, value:1, bonus:['к','с','н']},
+  {id:'a6',  name:'Крупный митинг в городе',                   cost:3, value:2, bonus:['ч','н','з','ж']},
+  {id:'a7',  name:'Статья в профильном журнале',               cost:2, value:1, bonus:['з','ж','с']},
+  {id:'a8',  name:'Выступление на радио',                      cost:2, value:1, bonus:['к','с']},
+  {id:'a9',  name:'Эфир на телевидении',                       cost:3, value:3, bonus:[]},
+  {id:'a10', name:'Реклама в прайм-тайм',                      cost:4, value:5, bonus:[], rarity:'rare'},
+  {id:'a11', name:'Запустить тренд в Тик-Токе',                cost:2, value:1, bonus:['ч','н','з','ж']},
+  {id:'a12', name:'Поквартирный обход',                        cost:2, value:1, bonus:['к','с']},
+  {id:'a13', name:'Раздача продовольственных пакетов',         cost:3, value:2, bonus:['з','к','ч']},
+  {id:'a14', name:'Рекламные листовки',                        cost:2, value:1, bonus:[]},
+  {id:'a15', name:'Рекламные билборды',                        cost:3, value:2, bonus:[]},
+  {id:'a16', name:'Раздача газет в людных местах',             cost:2, value:1, bonus:['к','с']},
+  {id:'a17', name:'Публичный перформанс',                      cost:2, value:1, bonus:['з','ж','ч','н']},
+  {id:'a18', name:'Организация концерта',                      cost:3, value:2, bonus:['ж','ч']},
+  {id:'a19', name:'Подкуп избирателей',                        cost:3, value:3, bonus:[], rarity:'rare'},
+  {id:'a20', name:'Телефонный обзвон',                         cost:2, value:1, bonus:['к','с']},
+  {id:'a21', name:'Автопробег',                                cost:3, value:2, bonus:['с','н']},
+  {id:'a22', name:'Субботники',                                cost:2, value:1, bonus:['з','к','ч']},
+  {id:'a23', name:'Закупка ботов в интернете',                 cost:3, value:3, bonus:[], rarity:'rare'},
+  {id:'a24', name:'Организация шествия',                       cost:2, value:2, bonus:['к','с','н']},
+  {id:'a25', name:'Закрытая встреча со спонсорами',            cost:0, value:2, bonus:[], moneyCard:true},
+  {id:'a26', name:'Получение иностранного финансирования',     cost:0, value:4, bonus:[], moneyCard:true, rarity:'rare'},
+  {id:'a27', name:'Таргетированная реклама в соцсетях',        cost:2, value:1, bonus:['з','ж']},
+  {id:'a28', name:'Политическая голодовка',                    cost:2, value:1, bonus:['ч','н']},
+  {id:'a29', name:'Инсценировка покушения',                    cost:3, value:3, bonus:[], rarity:'rare'},
+  {id:'a30', name:'Коррупция',                                 cost:0, value:3, bonus:[]},
+  {id:'a31', name:'Культ личности',                            cost:3, value:3, bonus:['к','ж','с','н'], rarity:'rare'},
+  {id:'a32', name:'Благотворительный концерт для детей',       cost:2, value:2, bonus:[]},
+  {id:'a33', name:'Финансирование студенческих организаций',   cost:2, value:2, bonus:['з','ж']},
+  {id:'a34', name:'Семейная ярмарка с воздушными шарами',      cost:2, value:2, bonus:[]},
+];
+
+const DISCREDIT_CARDS = [
+  {id:'d1', name:'Публикация компромата',           cost:1, value:1},
+  {id:'d3', name:'Плагиат в диссертации лидеров',    cost:0, value:1, requiresPartyIn:['ж','з']},
+  {id:'d4', name:'Журналистское расследование',      cost:1, value:2},
+  {id:'d5', name:'Пьяное интервью',                  cost:1, value:1, requiresPartyIn:['к','с']},
+  {id:'d6', name:'Обвинения в коррупции',            cost:2, value:4, requiresCard:'Коррупция', rarity:'rare'},
+  {id:'d7', name:'Обвинения в иностранном влиянии',  cost:2, value:4, requiresCard:'Получение иностранного финансирования', rarity:'rare'},
+  {id:'d8', name:'Порча подъездов агитацией',        cost:1, value:2, requiresPartyIn:['ч','н']},
+  {id:'d10',name:'Разоблачение культа личности',     cost:1, value:3, requiresCard:'Культ личности'},
+  {id:'d11',name:'Съемки фильма «Колыма»',           cost:1, value:1, requiresPartyIn:['з','к','ч']},
+  {id:'d12',name:'Компания очернения по ТВ',         cost:2, value:4, rarity:'rare'},
+  {id:'d13',name:'Импичмент',                        cost:2, value:3, targetsLeaderOnly:true, rarity:'rare'},
+];
+
+const LAWS_BY_PARTY = {
+  ч: ['Закон о расширении полномочий регионов','Закон о прямом народном законодательстве','Закон о ликвидации части государственных разрешительных органов','Закон о сокращении государственного регулирования','Закон о независимости центрального банка'],
+  к: ['Закон о бесплатном высшем образовании','Закон о запрете монополий','Закон о национализации стратегических отраслей','Закон о праве на забастовку','Закон о едином государственном стандарте минимальной зарплаты'],
+  з: ['Закон о прогрессивном налоге на доходы','Закон о сокращении рабочего дня','Закон о праве на забастовку','Закон о едином государственном стандарте минимальной зарплаты','Закон о бесплатном высшем образовании'],
+  ж: ['Закон о приватизации государственных предприятий','Закон о снижении налогов для малого бизнеса','Закон о свободе оборота земли','Закон о независимости центрального банка','Закон о сокращении государственного регулирования'],
+  с: ['Закон о сильной армии','Закон о защите традиционных ценностей','Закон о защите национального производителя','Закон о независимости центрального банка','Закон о приватизации государственных предприятий'],
+  н: ['Закон о запрете политического финансирования из-за рубежа','Закон о приоритете граждан при трудоустройстве','Закон о защите национального производителя','Закон о сильной армии','Закон о защите традиционных ценностей'],
+};
+
+const OTHER_LAWS = [
+  { name:'Вотум недоверия правительству', kind:'noConfidence', supermajority:true },
+  { name:'Импичмент', kind:'impeachment', supermajority:true },
+  { name:'Закон о переходе к президентской системе', kind:'systemPresidential', targetKey:'presidential', label:'Президентская республика', supermajority:true },
+  { name:'Закон о переходе к президентско-парламентской системе', kind:'systemPresParl', targetKey:'presParl', label:'Президентско-парламентская республика', supermajority:true },
+  { name:'Закон о переходе к парламентско-президентской системе', kind:'systemParlPres', targetKey:'parlPres', label:'Парламентско-президентская республика', supermajority:true },
+  { name:'Закон о переходе к парламентской системе', kind:'systemParliamentary', targetKey:'parliamentary', label:'Парламентская республика', supermajority:true },
+];
+
+const REFORMS = [
+  {name:'Реформа школьного образования', value:5, bonus:[], desc:'+5 партии, принявшей реформу'},
+  {name:'Реформа здравоохранения', value:5, bonus:[], desc:'+5 партии, принявшей реформу'},
+  {name:'Реформа полиции', value:3, bonus:[], desc:'+3 партии, принявшей реформу'},
+  {name:'Государственная промышленная программа', value:5, bonus:['с','к'], desc:'+5 партии, принявшей реформу; +2 консерваторам и коммунистам'},
+  {name:'Судебная цифровизация', value:2, bonus:[], desc:'+2 партии, принявшей реформу'},
+  {name:'Развитие общественного транспорта', value:3, bonus:[], desc:'+3 партии, принявшей реформу'},
+  {name:'Государственная программа занятости', value:2, bonus:[], desc:'+2 партии, принявшей реформу'},
+  {name:'Жилищная программа', value:2, bonus:[], desc:'+2 партии, принявшей реформу'},
+  {name:'Обновление фонда капитального строительства', value:2, bonus:[], desc:'+2 партии, принявшей реформу'},
+  {name:"Изменить электоральную формулу на пропорциональную Хэра", systemic:true, desc:'формула подсчёта мест → метод Хэра',
+    apply:(r)=>{ r.electoralFormula='hare'; r.log.push('— Электоральная формула изменена на метод Хэра —'); }},
+  {name:"Изменить электоральную формулу на пропорциональную Сент-Лагю", systemic:true, desc:'формула подсчёта мест → метод Сент-Лагю',
+    apply:(r)=>{ r.electoralFormula='sainte-lague'; r.log.push('— Электоральная формула изменена на метод Сент-Лагю —'); }},
+  {name:'Изменить электоральную формулу на мажоритарную относительного большинства', systemic:true, desc:'формула → мажоритарная',
+    apply:(r)=>{ r.electoralFormula='plurality'; r.log.push('— Электоральная формула изменена на мажоритарную —'); }},
+  {name:'Изменить электоральную формулу на мажоритарную очков Борда', systemic:true, desc:'формула → ранговые очки Борда',
+    apply:(r)=>{ r.electoralFormula='borda'; r.log.push('— Электоральная формула изменена на метод Борда —'); }},
+  {name:'Поднять заградительный барьер на 5%', systemic:true, desc:'барьер +5%',
+    apply:(r)=>{ r.electoralThreshold=Math.min(25,(r.electoralThreshold||0)+5); r.log.push(`— Барьер повышен до ${r.electoralThreshold}% —`); }},
+  {name:'Опустить заградительный барьер на 5%', systemic:true, desc:'барьер −5%',
+    apply:(r)=>{ r.electoralThreshold=Math.max(0,(r.electoralThreshold||0)-5); r.log.push(`— Барьер снижен до ${r.electoralThreshold}% —`); }},
+  {name:'Добавить +50% к нынешнему финансированию партий', systemic:true, desc:'финансирование ×1.5 (вверх)',
+    apply:(r)=>{ r.budgetPerCycle=Math.ceil(r.budgetPerCycle*1.5); r.log.push(`— Финансирование партий увеличено до ₽${r.budgetPerCycle} за цикл —`); }},
+  {name:'Снизить финансирование партий на 50%', systemic:true, desc:'финансирование ×0.5 (вверх)',
+    apply:(r)=>{ r.budgetPerCycle=Math.ceil(r.budgetPerCycle*0.5); r.log.push(`— Финансирование партий снижено до ₽${r.budgetPerCycle} за цикл —`); }},
+  {name:'Задать новую повестку «Реинновация»', systemic:true, desc:'коммунисты, анархисты и соц-демократы +5 на след. выборах',
+    apply:(r)=>{
+      r.currentEvent='Реинновация'; r.currentEventDesc='коммунисты, анархисты и соц-демократы +5 на след. выборах';
+      bump(r,'к',5); bump(r,'ч',5); bump(r,'з',5);
+      r.log.push('— Новая повестка: Реинновация —');
+    }},
+  {name:'Поднять явку на 25% агрессивной риторикой', systemic:true, desc:'явка ×1.25',
+    apply:(r)=>{ r.turnout=Math.min(95,Math.round((r.turnout||50)*1.25)); r.log.push(`— Явка повышена до ${r.turnout}% —`); }},
+  {name:'Снизить явку на 25% рассказами о стабильности', systemic:true, desc:'явка ×0.75',
+    apply:(r)=>{ r.turnout=Math.max(20,Math.round((r.turnout||50)*0.75)); r.log.push(`— Явка снижена до ${r.turnout}% —`); }},
+];
+
+function bump(r, party, amount){ r.reformBonus[party]=(r.reformBonus[party]||0)+amount; }
+const EVENTS = [
+  { name:'Рост ВВП', weight:10, desc:'без эффекта', effect:null },
+  { name:'Катаклизм', weight:1, desc:'соц-демократы и либералы +5', effect:(r)=>{ bump(r,'з',5); bump(r,'ж',5); } },
+  { name:'Война', weight:1, desc:'прошлый лидер +15', effect:(r)=>{ if(r.lastPresident) bump(r,r.lastPresident,15); } },
+  { name:'Стабильность', weight:1, desc:'националисты и анархисты −3', effect:(r)=>{ bump(r,'н',-3); bump(r,'ч',-3); } },
+  { name:'Эпидемия', weight:1, desc:'соц-демократы +3', effect:(r)=>{ bump(r,'з',3); } },
+  { name:'Рабочие волнения', weight:1, desc:'коммунисты +3', effect:(r)=>{ bump(r,'к',3); } },
+  { name:'Приток мигрантов', weight:1, desc:'националисты +3', effect:(r)=>{ bump(r,'н',3); } },
+  { name:'Открытие новых рынков', weight:1, desc:'либералы +3', effect:(r)=>{ bump(r,'ж',3); } },
+  { name:'Рост активности молодёжи', weight:1, desc:'анархисты +3', effect:(r)=>{ bump(r,'ч',3); } },
+];
+function drawEvent(){
+  const total = EVENTS.reduce((s,e)=>s+e.weight,0);
+  let x = Math.random()*total;
+  for(const e of EVENTS){ if(x<e.weight) return e; x-=e.weight; }
+  return EVENTS[0];
+}
+function drawAndApplyEvent(r){
+  const ev = drawEvent();
+  r.currentEvent = ev.name;
+  r.currentEventDesc = ev.desc;
+  if(ev.effect) ev.effect(r);
+}
+function updateTurnout(r){
+  let t = 35 + Math.random()*20;
+  const disagreements = (r.cycleActions||[]).filter(a=>a.result==='rejected'||a.result==='vetoed').length;
+  t += disagreements*4;
+  if(r.governmentDismissedThisCycle) t += 15;
+  if(r.currentEvent==='Стабильность' || r.currentEvent==='Рост ВВП') t -= 10;
+  r.turnout = Math.max(20, Math.min(95, Math.round(t)));
+  r.governmentDismissedThisCycle = false;
+}
+function weightedPickWithoutReplacement(items, weights, n){
+  const pool = items.map((it,i)=>({it, w:weights[i]}));
+  const out=[];
+  for(let k=0;k<n && pool.length;k++){
+    const total = pool.reduce((s,p)=>s+p.w,0)||1;
+    let r = Math.random()*total;
+    let idx=0;
+    for(;idx<pool.length;idx++){ if(r<pool[idx].w) break; r-=pool[idx].w; }
+    if(idx>=pool.length) idx=pool.length-1;
+    out.push(pool.splice(idx,1)[0].it);
+  }
+  return out;
+}
+function rollReforms(r){
+  const weights = REFORMS.map(rf=>rf.systemic?1:3);
+  r.availableReforms = weightedPickWithoutReplacement(REFORMS, weights, 8).map(rf=>rf.name);
+}
+function rollLawsForCycle(r){
+  const seatedParties = PARTY_KEYS.filter(k=>(r.electionResult.seats[k]||0)>0);
+  const guaranteed = [];
+  seatedParties.forEach(party=>{
+    const remaining = LAWS_BY_PARTY[party].filter(l=>!r.allPassedLaws.includes(l) && !guaranteed.includes(l));
+    if(remaining.length){ guaranteed.push(remaining[Math.floor(Math.random()*remaining.length)]); }
+  });
+  const partyPoolAll = Array.from(new Set(Object.values(LAWS_BY_PARTY).flat()));
+  const otherLawNames = OTHER_LAWS.map(l=>l.name);
+  const remainingPool = partyPoolAll.filter(l=>!guaranteed.includes(l));
+  const items = remainingPool.concat(otherLawNames);
+  const weights = remainingPool.map(()=>3).concat(OTHER_LAWS.map(l=> l.kind==='impeachment' ? 5 : (l.kind==='noConfidence' ? 2 : 1)));
+  const extraNeeded = Math.max(0, 5-guaranteed.length);
+  const extra = weightedPickWithoutReplacement(items, weights, extraNeeded);
+  r.availableLaws = guaranteed.concat(extra);
+}
+
+const TOTAL_SEATS = 450;
+const START_BUDGET = 4;
+const GOV_SEATS_TOTAL = 12;
+const HAND_SIZE = 8;
+const TOTAL_POPULATION = 150000000;
+
+const FORMULA_LABELS = {
+  dhondt: "Метод Д'Ондта (пропорциональная)",
+  'sainte-lague': 'Метод Сент-Лагю (пропорциональная)',
+  hare: 'Метод Хэра (пропорциональная, квота)',
+  plurality: 'Мажоритарная (относительное большинство)',
+  borda: 'Мажоритарная (очки Борда)',
+};
+
+const SYSTEM_TYPES = {
+  presidential:  { key:'presidential',  label:'Президентская республика',                 formula:'plurality',  threshold:0, hasPresident:true,  canParliamentDismiss:false, canLeaderDismissUnilaterally:false },
+  presParl:      { key:'presParl',      label:'Президентско-парламентская республика',     formula:'dhondt',     threshold:5, hasPresident:true,  canParliamentDismiss:true,  canLeaderDismissUnilaterally:true  },
+  parlPres:      { key:'parlPres',      label:'Парламентско-президентская республика',     formula:'dhondt',     threshold:5, hasPresident:true,  canParliamentDismiss:true,  canLeaderDismissUnilaterally:false },
+  parliamentary: { key:'parliamentary', label:'Парламентская республика',                  formula:'dhondt',     threshold:5, hasPresident:false, canParliamentDismiss:true,  canLeaderDismissUnilaterally:true  },
+};
+function getSysDef(r){ return SYSTEM_TYPES[r.systemTypeKey]; }
+function getSystemLabel(r){ return getSysDef(r).label; }
+function getLeaderParty(r){
+  const sysDef = getSysDef(r);
+  if(sysDef.hasPresident) return (r.electionResult && r.electionResult.president) || null;
+  const seats = (r.electionResult && r.electionResult.seats) || {};
+  const entries = Object.entries(seats).filter(([k,v])=>v>0).sort((a,b)=>b[1]-a[1]);
+  return entries.length ? entries[0][0] : null;
+}
+
+/* ============================== ICONS & HERALDRY ============================== */
+
+function partyIcon(key){
+  switch(key){
+    case 'ч':
+      return `<circle cx="20" cy="20" r="13" fill="none" stroke="currentColor" stroke-width="2.4"/>
+              <path d="M20 10 L28 29 M20 10 L12 29 M14.5 23 L25.5 23" stroke="currentColor" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`;
+    case 'к':
+      return `<path d="M12 28 A8 8 0 1 1 24 15" stroke="currentColor" stroke-width="3.2" fill="none" stroke-linecap="round"/>
+              <g transform="rotate(45 22 16)">
+                <rect x="20" y="4" width="4" height="24" fill="currentColor"/>
+                <rect x="14" y="4" width="16" height="4" fill="currentColor"/>
+              </g>`;
+    case 'з':
+      return `<path d="M12 20 C12 16 15 14 20 14 C25 14 28 16 28 20 L28 26 C28 30 24 32 20 32 C16 32 12 30 12 26 Z" fill="currentColor"/>
+              <circle cx="20" cy="9" r="4.5" fill="currentColor"/>
+              <circle cx="15" cy="12" r="3" fill="currentColor" opacity=".85"/>
+              <circle cx="25" cy="12" r="3" fill="currentColor" opacity=".85"/>
+              <rect x="18.5" y="13" width="3" height="8" fill="currentColor"/>`;
+    case 'ж':
+      return `<rect x="11" y="6" width="2.5" height="28" fill="currentColor"/>
+              <path d="M13.5 8 C19 5 23 11 29 8 L29 20 C23 23 19 17 13.5 20 Z" fill="currentColor"/>`;
+    case 'с':
+      return `<path d="M8 26 C5 18 8 9 16 6" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+              <path d="M32 26 C35 18 32 9 24 6" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+              <path d="M20 8 C14 13 15 18 20 21 C25 18 26 13 20 8 Z" fill="currentColor"/>
+              <rect x="17" y="21" width="6" height="12" fill="currentColor"/>`;
+    case 'н':
+      return `<path d="M6 11 L34 11 L34 22 L20 33 L6 22 Z" fill="none" stroke="currentColor" stroke-width="2.4"/>
+              <path d="M12 17 C12 13.5 15.5 11 20 11 C24.5 11 28 13.5 28 17 L28 22 C28 26.5 24.5 29 20 29 C15.5 29 12 26.5 12 22 Z" fill="currentColor"/>`;
+    default: return '';
+  }
+}
+function miniLogo(key, size){
+  size = size||16;
+  return `<svg class="mini-logo" width="${size}" height="${size}" viewBox="0 0 40 40" color="${PARTIES[key].color}">${partyIcon(key)}</svg>`;
+}
+function standardSVG(key, size){
+  const c = PARTIES[key].color;
+  return `<svg viewBox="0 0 44 96" width="${size}" height="${size*96/44}">
+    <path class="flag-shape" d="M4,4 L40,4 L40,68 L22,84 L4,68 Z" fill="${c}"/>
+    <line x1="4" y1="4" x2="4" y2="92" stroke="#4a3f2a" stroke-width="3"/>
+    <g transform="translate(2,6)" color="#fff">${partyIcon(key)}</g>
+  </svg>`;
+}
+
+/* ---------- hemicycle (parliament fan) ---------- */
+function hemicyclePath(cx,cy,rOuter,rInner,startDeg,endDeg){
+  const rad = d => d*Math.PI/180;
+  const pt = (r,deg) => [ (cx + r*Math.cos(rad(deg))).toFixed(2), (cy - r*Math.sin(rad(deg))).toFixed(2) ];
+  const [x1,y1]=pt(rOuter,startDeg), [x2,y2]=pt(rOuter,endDeg);
+  const [x3,y3]=pt(rInner,endDeg), [x4,y4]=pt(rInner,startDeg);
+  const large = Math.abs(startDeg-endDeg) > 180 ? 1 : 0;
+  return `M ${x1} ${y1} A ${rOuter} ${rOuter} 0 ${large} 1 ${x2} ${y2} L ${x3} ${y3} A ${rInner} ${rInner} 0 ${large} 0 ${x4} ${y4} Z`;
+}
+function renderHemicycle(seats){
+  const entries = PARTY_KEYS.filter(k=>(seats[k]||0)>0).map(k=>({k,v:seats[k]}));
+  const total = entries.reduce((s,e)=>s+e.v,0);
+  if(!total){
+    return `<svg viewBox="0 0 400 210" class="hemicycle-svg">
+      <path d="${hemicyclePath(200,195,180,90,180,0)}" fill="#241f18" stroke="#4a3f2a" stroke-width="2"/>
+      <text x="200" y="150" text-anchor="middle" fill="#6b6455" font-family="ui-monospace,monospace" font-size="13">нет данных</text>
+    </svg>`;
+  }
+  let cum=0;
+  const segs = entries.map(e=>{
+    const startDeg = 180 - (cum/total)*180;
+    cum+=e.v;
+    const endDeg = 180 - (cum/total)*180;
+    return `<path d="${hemicyclePath(200,195,180,90,startDeg,endDeg)}" fill="${PARTIES[e.k].color}" stroke="#0e0c09" stroke-width="2"/>`;
+  }).join('');
+  return `<svg viewBox="0 0 400 210" class="hemicycle-svg">${segs}
+    <text x="200" y="205" text-anchor="middle" fill="var(--brass)" font-family="ui-monospace,monospace" font-size="11">${total} мандатов</text>
+  </svg>`;
+}
+function renderSeatBreakdown(seats){
+  const entries = PARTY_KEYS.filter(k=>(seats[k]||0)>0).sort((a,b)=>seats[b]-seats[a]);
+  if(!entries.length) return '';
+  return `<div class="seat-breakdown">
+    ${entries.map(k=>`<div class="seat-row">${miniLogo(k,16)}<span>${PARTIES[k].name}</span><b class="mono">${seats[k]}</b></div>`).join('')}
+  </div>`;
+}
+
+/* ---------- state population map: irregular coastline, always drifting ---------- */
+function seedRand(seed){ const x=Math.sin(seed*127.1)*43758.5453; return x - Math.floor(x); }
+function buildCoastline(){
+  const cx=160, cy=130, baseR=100, n=28;
+  const pts=[];
+  for(let i=0;i<n;i++){
+    const angle = (i/n)*Math.PI*2;
+    const r = baseR
+      + 22*Math.sin(angle*3+1.1)
+      + 14*Math.sin(angle*5+2.7)
+      + 8*Math.sin(angle*7+0.4);
+    pts.push([ (cx+r*Math.cos(angle)).toFixed(1), (cy+r*Math.sin(angle)*0.78).toFixed(1) ]);
+  }
+  return pts;
+}
+const BLOB_PATH = 'M' + buildCoastline().map(p=>p[0]+','+p[1]).join(' L ') + ' Z';
+const GRID_COLS = 24, GRID_ROWS = 16;
+const TOTAL_POP = GRID_COLS*GRID_ROWS;
+const NEUTRAL_COLOR = '#8a8272';
+const FILL_ORDER = Array.from({length:TOTAL_POP},(_,i)=>i).sort((a,b)=>seedRand(a*17.37)-seedRand(b*17.37));
+function personDot(x,y,color,idx){
+  const dur = (2 + seedRand(idx*3.1)*2.5).toFixed(2);
+  const delay = (-(seedRand(idx*5.3)*dur)).toFixed(2);
+  return `<g transform="translate(${x.toFixed(1)},${y.toFixed(1)})">
+    <g style="animation:personWander ${dur}s ease-in-out infinite;animation-delay:${delay}s;">
+      <circle cx="0" cy="-2.4" r="1.3" fill="${color}"/>
+      <path d="M-1.7,3.2 C-1.8,-0.2 -1.3,-1 0,-1 C1.3,-1 1.8,-0.2 1.7,3.2 Z" fill="${color}"/>
+    </g>
+  </g>`;
+}
+function allocateSlots(support, totalSlots){
+  const parties = PARTY_KEYS.filter(k=>(support[k]||0)>0);
+  const totalSupport = parties.reduce((s,k)=>s+support[k],0);
+  const alloc = {};
+  if(totalSupport<=0 || totalSlots<=0) return alloc;
+  const raw = parties.map(k=>({k, exact: support[k]/totalSupport*totalSlots}));
+  let used=0;
+  raw.forEach(x=>{ alloc[x.k]=Math.floor(x.exact); used+=alloc[x.k]; });
+  let remainder = totalSlots-used;
+  raw.sort((a,b)=>(b.exact-Math.floor(b.exact))-(a.exact-Math.floor(a.exact)));
+  for(let i=0;i<remainder && raw.length;i++){ alloc[raw[i%raw.length].k]++; }
+  return alloc;
+}
+function renderStateBlob(support){
+  const totalSupport = PARTY_KEYS.reduce((s,k)=>s+(support[k]||0),0);
+  const engaged = Math.min(TOTAL_POP, Math.round(TOTAL_POP*totalSupport/(totalSupport+40)));
+  const alloc = allocateSlots(support, engaged);
+  const owners=[];
+  PARTY_KEYS.forEach(k=>{ for(let i=0;i<(alloc[k]||0);i++) owners.push(k); });
+  const cellColor = new Array(TOTAL_POP).fill(NEUTRAL_COLOR);
+  for(let i=0;i<owners.length;i++){ cellColor[FILL_ORDER[i]] = PARTIES[owners[i]].color; }
+  const marginX=8, marginY=8, w=304-marginX*2, h=248-marginY*2;
+  let people='';
+  for(let idx=0; idx<TOTAL_POP; idx++){
+    const col = idx % GRID_COLS, row = Math.floor(idx/GRID_COLS);
+    const x = marginX + (col+0.5)*(w/GRID_COLS);
+    const y = marginY + (row+0.5)*(h/GRID_ROWS);
+    people += personDot(x,y,cellColor[idx],idx);
+  }
+  return `<svg viewBox="0 0 320 260" class="state-svg">
+    <defs><clipPath id="blobClip"><path d="${BLOB_PATH}"/></clipPath></defs>
+    <path d="${BLOB_PATH}" fill="#e9e1cc" stroke="var(--brass)" stroke-width="2.5"/>
+    <g clip-path="url(#blobClip)">${people}</g>
+    <path d="${BLOB_PATH}" fill="none" stroke="var(--brass)" stroke-width="2.5"/>
+  </svg>`;
+}
+
+/* ---------- card dependencies ---------- */
+function cardMeetsPrereq(card, targetParty, r){
+  r = r || room;
+  if(card.targetsLeaderOnly){ return !!r.lastPresident && targetParty === r.lastPresident; }
+  if(card.requiresCard){ return (r.cardHistory[targetParty]||[]).includes(card.requiresCard); }
+  if(card.requiresPartyIn){ return card.requiresPartyIn.includes(targetParty); }
+  return true;
+}
+function validTargets(card, actingParty){
+  return room.players.filter(p=>p.party!==actingParty && cardMeetsPrereq(card, p.party));
+}
+function validTargetsFor(r, card, actingParty){
+  return r.players.filter(p=>p.party!==actingParty && cardMeetsPrereq(card, p.party, r));
+}
+
+/* ============================== UTIL ============================== */
+
+function uid(){ return Math.random().toString(36).slice(2,10); }
+function sleep(ms){ return new Promise(res=>setTimeout(res,ms)); }
+function pickRandom(arr,n){
+  const pool=[...arr]; const out=[];
+  for(let i=0;i<n && pool.length;i++){
+    out.push(pool.splice(Math.floor(Math.random()*pool.length),1)[0]);
+  }
+  return out;
+}
+function dealHandN(n){
+  const agCount = Math.min(AGITATION_CARDS.length, Math.round(n*0.75));
+  const diCount = Math.min(DISCREDIT_CARDS.length, n-agCount);
+  const ag = pickRandom(AGITATION_CARDS,agCount).map(c=>({...c,type:'agitation'}));
+  const di = pickRandom(DISCREDIT_CARDS,diCount).map(c=>({...c,type:'discredit'}));
+  const merged=[...ag,...di];
+  for(let i=merged.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [merged[i],merged[j]]=[merged[j],merged[i]]; }
+  return merged.map(c=>({...c, handId:uid()}));
+}
+function dealHand(){ return dealHandN(HAND_SIZE); }
+
+function allocateSeats(votes, totalSeats, method, thresholdPct){
+  thresholdPct = thresholdPct || 0;
+  const totalVotes = Object.values(votes).reduce((a,b)=>a+b,0) || 1;
+  let eligible = {};
+  Object.entries(votes).forEach(([k,v])=>{ if((v/totalVotes*100) >= thresholdPct) eligible[k]=v; });
+  if(Object.keys(eligible).length===0){
+    const top = Object.entries(votes).sort((a,b)=>b[1]-a[1])[0];
+    if(top) eligible[top[0]]=top[1];
+  }
+  const keys = Object.keys(eligible).filter(k=>eligible[k]>0);
+  const alloc = {}; keys.forEach(k=>alloc[k]=0);
+  if(keys.length===0) return alloc;
+  const v = eligible;
+  if(method==='plurality'){
+    const sorted=[...keys].sort((a,b)=>v[b]-v[a]);
+    const winner=sorted[0];
+    alloc[winner]=Math.round(totalSeats*0.55);
+    let remaining=totalSeats-alloc[winner];
+    const rest=sorted.slice(1);
+    const restTotal=rest.reduce((s,k)=>s+v[k],0)||1;
+    rest.forEach((k,i)=>{
+      alloc[k]= i===rest.length-1 ? remaining : Math.round(remaining*v[k]/restTotal);
+      remaining-=alloc[k];
+    });
+    return alloc;
+  }
+  if(method==='hare'){
+    const total = keys.reduce((s,k)=>s+v[k],0)||1;
+    const quota = total/totalSeats;
+    let used=0; const remainders=[];
+    keys.forEach(k=>{
+      const exact=v[k]/quota;
+      alloc[k]=Math.floor(exact); used+=alloc[k];
+      remainders.push({k,rem:exact-alloc[k]});
+    });
+    let remaining=totalSeats-used;
+    remainders.sort((a,b)=>b.rem-a.rem);
+    for(let i=0;i<remaining && i<remainders.length;i++){ alloc[remainders[i].k]++; }
+    return alloc;
+  }
+  if(method==='borda'){
+    const sorted=[...keys].sort((a,b)=>v[b]-v[a]);
+    const n=sorted.length;
+    const bordaPts={};
+    sorted.forEach((k,i)=>{ bordaPts[k]= n>1 ? (n-1-i) : 1; });
+    return allocateSeats(bordaPts, totalSeats, 'dhondt', 0);
+  }
+  const divisor = method==='sainte-lague' ? (n)=>(2*n-1) : (n)=>n;
+  const quots=[];
+  keys.forEach(k=>{ for(let n=1;n<=totalSeats;n++) quots.push({k,q:v[k]/divisor(n)}); });
+  quots.sort((x,y)=>y.q-x.q);
+  for(let i=0;i<totalSeats && i<quots.length;i++) alloc[quots[i].k]++;
+  return alloc;
+}
+
+function applyReformEffect(r, title, by){
+  const rf = REFORMS.find(x=>x.name===title);
+  if(!rf) return;
+  if(rf.systemic){ rf.apply(r, by); }
+  else {
+    r.reformBonus[by] = (r.reformBonus[by]||0) + rf.value;
+    (rf.bonus||[]).forEach(b=>{ if(b!==by) r.reformBonus[b]=(r.reformBonus[b]||0)+1; });
+  }
+  r.passedHistory = r.passedHistory||[];
+  r.passedHistory.push({kind:'reform', title, by, cycle:r.cycle});
+}
+function reverseReformEffects(r){
+  (r.cycleActions||[]).forEach(a=>{
+    if(a.kind==='reform' && a.result==='passed'){
+      const rf = REFORMS.find(x=>x.name===a.title);
+      if(rf && !rf.systemic){
+        r.reformBonus[a.by] = (r.reformBonus[a.by]||0) - rf.value;
+        (rf.bonus||[]).forEach(b=>{ if(b!==a.by) r.reformBonus[b]=(r.reformBonus[b]||0)-1; });
+      }
+      a.result = 'reversed';
+    }
+  });
+}
+
+function applyImpeachment(r){
+  const sysDef = getSysDef(r);
+  reverseReformEffects(r);
+  if(r.electionResult){
+    if(sysDef.hasPresident) r.electionResult.president = null;
+    r.electionResult.government = null;
+    r.electionResult.govSeats = {};
+    r.electionResult.invited = [];
+  }
+  r.governmentDismissedThisCycle = true;
+  r.log.push(`— Импичмент принят: полномочия лидера аннулированы, правительство распущено —`);
+}
+
+function checkVictory(r){
+  if(r.status==='ended') return;
+  const doneParties = PARTY_KEYS.filter(k=>r.players.some(p=>p.party===k) && LAWS_BY_PARTY[k].every(l=>r.allPassedLaws.includes(l)));
+  if(doneParties.length){
+    r.status='ended';
+    r.winners = doneParties;
+    r.log.push(`— ИГРА ОКОНЧЕНА. Победа: ${doneParties.map(k=>PARTIES[k].name).join(', ')} —`);
+  }
+}
+
+/* ============================== STORAGE ==============================
+   Room state is persisted through a small storage abstraction so this
+   file can run two ways:
+
+   1) Inside Anthropic's Claude.ai artifact viewer, `window.storage` is
+      injected automatically and provides real shared storage across
+      different users/devices viewing the same published artifact —
+      genuine cross-device multiplayer, no setup needed.
+
+   2) Anywhere else (opened as a plain .html file, or hosted as a static
+      page e.g. on GitHub Pages), `window.storage` does not exist. This
+      falls back to the browser's own localStorage. localStorage is
+      PER-BROWSER ONLY, so in this mode "multiplayer" only works across
+      multiple tabs/windows on the SAME device (handy for solo/hotseat
+      testing), not across separate devices.
+
+   To get real cross-device multiplayer on a static host like GitHub
+   Pages, replace storageGet/storageSet below with calls to a small
+   backend of your choice (Firebase Realtime Database, Supabase, a tiny
+   REST API you write, etc.) that stores/retrieves a string value by key.
+   Nothing else in the file needs to change — loadRoom/saveRoom below are
+   the only two functions that call these.
+================================================================== */
+
+const HAS_CLAUDE_STORAGE = (typeof window!=='undefined' && window.storage
+  && typeof window.storage.get==='function' && typeof window.storage.set==='function');
+
+async function storageGet(key){
+  if(HAS_CLAUDE_STORAGE){
+    try{ const r = await window.storage.get(key, true); return r ? r.value : null; }
+    catch(e){ return null; }
+  }
+  try{ return localStorage.getItem('politia:'+key); }catch(e){ return null; }
+}
+async function storageSet(key, value){
+  if(HAS_CLAUDE_STORAGE){
+    try{ await window.storage.set(key, value, true); return; }catch(e){ return; }
+  }
+  try{ localStorage.setItem('politia:'+key, value); }catch(e){ /* ignore quota/availability errors */ }
+}
+
+async function loadRoom(code){
+  try{
+    const raw = await storageGet('room:'+code);
+    return raw ? JSON.parse(raw) : null;
+  }catch(e){ return null; }
+}
+async function saveRoom(state){
+  await storageSet('room:'+state.code, JSON.stringify(state));
+}
+
+/* ============================== APP STATE ============================== */
+
+let me = { id: uid(), name:'', roomCode:'' };
+let room = null;
+let view = 'landing';
+let uiError = '';
+let pollTimer = null;
+let botTickTimer = null;
+let animatingReveal = false;
+let lastAnimatedElectionTs = null;
+let lastAnimatedPresTs = null;
+let lastAnimatedResolutionTs = null;
+let hasInitializedRevealTracking = false;
+let discreditPicker = null;
+let selectedProposalTitle = null;
+let myNotes = '';
+
+function render(){
+  if(animatingReveal) return;
+  const scrollY = window.scrollY;
+  const root=document.getElementById('root');
+  const scrollPositions = {};
+  root.querySelectorAll('[data-scroll-id]').forEach(el=>{ scrollPositions[el.dataset.scrollId]=el.scrollTop; });
+  root.innerHTML = `
+    <div class="masthead">
+      <div class="seal"><svg width="30" height="30" viewBox="0 0 40 40" color="var(--brass)"><circle cx="20" cy="20" r="15" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="20" cy="20" r="4" fill="currentColor"/></svg></div>
+      <h1 class="display">Полития</h1>
+      <div class="tag">Государство «Люмен»</div>
+    </div>
+    ${uiError ? `<div class="plaque error-plaque">${uiError}</div>` : ''}
+    ${view==='landing' ? `<div class="colonnade">${renderLanding()}</div>` : ''}
+    ${view==='lobby' ? renderLobby() : ''}
+    ${view==='game' ? renderGame() : ''}
+  `;
+  root.querySelectorAll('[data-scroll-id]').forEach(el=>{
+    if(scrollPositions[el.dataset.scrollId]!==undefined) el.scrollTop = scrollPositions[el.dataset.scrollId];
+  });
+  attachHandlers();
+  window.scrollTo(0, scrollY);
+}
+
+/* ---------- LANDING ---------- */
+function renderLanding(){
+  return `
+    ${!HAS_CLAUDE_STORAGE ? `<div class="plaque error-plaque"><b>Автономный режим:</b> общее хранилище Claude недоступно, поэтому комната сохраняется только в этом браузере (localStorage). Несколько вкладок на одном устройстве видят одну комнату — подойдёт для тестирования в одиночку или хотсит. Для игры между разными устройствами подключите свой бэкенд — см. комментарий у функций storageGet/storageSet в коде.</div>` : ''}
+    <div class="plaque">
+      <h2 class="section-title">Создать комнату</h2>
+      <div class="row">
+        <div><label>Ваше имя</label><input type="text" id="hostName" placeholder="Например, Виктор"></div>
+        <div><label>Тип политической системы</label>
+          <select id="scenarioSel">${Object.values(SYSTEM_TYPES).map(s=>`<option value="${s.key}">${s.label}</option>`).join('')}</select>
+        </div>
+      </div>
+      <div class="row mt8">
+        <div><label>Играть с ботами</label>
+          <select id="botCountSel">
+            <option value="0">Без ботов</option>
+            <option value="1">1 бот</option>
+            <option value="2">2 бота</option>
+            <option value="3">3 бота</option>
+            <option value="4">4 бота</option>
+            <option value="5">5 ботов</option>
+          </select>
+        </div>
+        <div><label>Сложность ботов</label>
+          <select id="botDifficultySel">
+            <option value="easy">Лёгкая</option>
+            <option value="medium" selected>Средняя</option>
+            <option value="hard">Сложная</option>
+          </select>
+        </div>
+      </div>
+      <button id="createBtn" class="mt16">Создать комнату</button>
+    </div>
+    <div class="plaque">
+      <h2 class="section-title">Присоединиться</h2>
+      <div class="row">
+        <div><label>Ваше имя</label><input type="text" id="joinName" placeholder="Ваше имя"></div>
+        <div><label>Код комнаты</label><input type="text" id="joinCode" placeholder="Например, XK4P"></div>
+      </div>
+      <button id="joinBtn" class="mt16">Войти в комнату</button>
+    </div>
+    <p class="small center">Держите вкладку открытой — состояние партии обновляется каждые пару секунд. Боты действуют, пока открыта вкладка хоста.</p>
+  `;
+}
+
+/* ---------- LOBBY ---------- */
+function renderLobby(){
+  if(!room) return '<div class="waiting">Загрузка комнаты…</div>';
+  const takenParties = room.players.map(p=>p.party);
+  const sysDef = getSysDef(room);
+  const iAmIn = room.players.some(p=>p.id===me.id);
+  const myParty = room.players.find(p=>p.id===me.id)?.party;
+  return `
+    <div class="plaque">
+      <div class="flex-between">
+        <h2 class="section-title" style="border:none;margin:0;padding:0;">Лобби — код ${room.code}</h2>
+        <span class="badge">${sysDef.label}</span>
+      </div>
+      <p class="small">Отправьте код <b style="color:var(--brass-bright)">${room.code}</b> остальным игрокам, чтобы они присоединились.</p>
+      <div class="players-strip mt8">
+        ${room.players.map(p=>`
+          <div class="player-chip">
+            ${p.party?miniLogo(p.party):''}
+            ${p.name}${p.isBot?' 🤖':''}${p.party?` — ${PARTIES[p.party].name}`:' (выбирает штандарт)'}
+          </div>
+        `).join('') || '<span class="small">Пока никого нет</span>'}
+      </div>
+      ${iAmIn ? `
+        <h2 class="section-title mt16">Выберите штандарт партии</h2>
+        <div class="standards-row">
+          ${PARTY_KEYS.map(k=>{
+            const takenBy = takenParties.includes(k) && myParty!==k;
+            const mine = myParty===k;
+            return `<div class="standard ${takenBy?'taken':''} ${mine?'selected':''}" data-party="${k}">
+              ${standardSVG(k,68)}
+              <div class="pname">${PARTIES[k].name}</div>
+            </div>`;
+          }).join('')}
+        </div>
+      ` : ''}
+      <div class="mt16 flex-between">
+        <span class="small">Игроков: ${room.players.length} / нужно минимум 2</span>
+        ${room.hostId===me.id ? `<button id="startBtn" ${room.players.filter(p=>!p.isBot).length<1 || myParty===null || myParty===undefined ? 'disabled':''}>Начать игру</button>` : `<span class="small">Ждём хоста…</span>`}
+      </div>
+    </div>
+  `;
+}
+
+function renderSystemInfo(meP){
+  const sysLabel = getSystemLabel(room);
+  const myBonus = meP ? (room.reformBonus[meP.party]||0) : 0;
+  const bonusColor = myBonus>0?'#8fd18a':(myBonus<0?'#e07a72':'var(--marble-dim)');
+  const bonusStr = myBonus>0?`+${myBonus}`:`${myBonus}`;
+  const votingMillion = Math.round(TOTAL_POPULATION*(room.turnout||50)/100/1e6);
+  return `
+    <div class="info-bar">
+      ${meP?`<div class="info-cell"><div class="il">Играете за</div><div class="iv">${miniLogo(meP.party,14)} ${PARTIES[meP.party].name} <span class="mono" style="color:${bonusColor}">(${bonusStr})</span></div></div>`:''}
+      <div class="info-cell"><div class="il">Тип системы</div><div class="iv">${sysLabel}</div></div>
+      <div class="info-cell"><div class="il">Электоральная формула</div><div class="iv">${FORMULA_LABELS[room.electoralFormula]}</div></div>
+      <div class="info-cell"><div class="il">Барьер / явка</div><div class="iv">${room.electoralThreshold}% / ${room.turnout||'—'}% (${votingMillion} млн из 150 млн)</div></div>
+      <div class="info-cell"><div class="il">Финансирование за цикл</div><div class="iv">₽${room.budgetPerCycle} (+остаток)</div></div>
+      <div class="info-cell"><div class="il">Сейчас на повестке дня</div><div class="iv">${room.currentEvent||'—'}${room.currentEventDesc?` — ${room.currentEventDesc}`:''}</div></div>
+    </div>
+  `;
+}
+
+function renderAgendaPanel(meP){
+  if(!meP) return '';
+  const passed = room.allPassedLaws||[];
+  const list = LAWS_BY_PARTY[meP.party]||[];
+  return `<div class="plaque agenda-col">
+    <h3>${miniLogo(meP.party,15)} Ваша повестка</h3>
+    ${list.map(title=>{
+      const done = passed.includes(title);
+      return `<div class="agenda-item ${done?'done':''}"><span class="agenda-check">${done?'✓':''}</span><span>${title}</span></div>`;
+    }).join('')}
+  </div>`;
+}
+
+function renderHistoryPanel(){
+  const hist = room.passedHistory||[];
+  return `<div class="plaque">
+    <h3 style="margin:0 0 8px;font-size:11.5px;font-family:ui-monospace,monospace;letter-spacing:.06em;color:var(--brass-bright);">Принятые законы и реформы</h3>
+    ${hist.length ? `<div class="log" data-scroll-id="historyLog">${hist.slice().reverse().map(h=>`<div>Цикл ${h.cycle} — ${h.kind==='law'?'закон':'реформа'} «${h.title}» · ${PARTIES[h.by].name}</div>`).join('')}</div>` : `<p class="small">Пока ничего не принято</p>`}
+  </div>`;
+}
+
+function renderVictoryScreen(){
+  const winners = room.winners||[];
+  return `<div class="reveal-wrap">
+    <div class="reveal-kicker">Партия завершена</div>
+    <div class="reveal-title" style="font-size:30px;">Победа: ${winners.map(k=>PARTIES[k].name).join(' и ')}!</div>
+    <div style="display:flex;justify-content:center;gap:16px;margin:24px 0;flex-wrap:wrap;">
+      ${winners.map(k=>standardSVG(k,110)).join('')}
+    </div>
+    <p class="small">Поздравляем — законодательная программа партии выполнена полностью. Победа в игре «Полития»!</p>
+    ${room.hostId===me.id ? `<button id="returnLobbyBtn" class="mt16">Вернуться в лобби</button>` : `<p class="small">Ждём хоста…</p>`}
+  </div>`;
+}
+
+/* ---------- GAME ---------- */
+function renderGame(){
+  if(!room) return '<div class="waiting">Загрузка…</div>';
+  if(room.status==='ended') return renderVictoryScreen();
+  const meP = room.players.find(p=>p.id===me.id);
+  const phaseNames = ['','Агитация','Выборы','Законы и реформы'];
+  const er = room.electionResult;
+  const sysDef = getSysDef(room);
+  const leaderParty = getLeaderParty(room);
+  const leaderTitle = sysDef.hasPresident ? 'Президент' : 'Премьер-министр';
+  const govSeats = er?.govSeats || {};
+  const gov = er?.government || [];
+
+  return `
+    ${renderSystemInfo(meP)}
+    <div class="phase-track">
+      ${[1,2,3].map(p=>`<div class="phase-step ${room.phase===p?'active':''}">Фаза ${p} · ${phaseNames[p]}</div>`).join('')}
+    </div>
+    <div class="plaque">
+      <div class="flex-between">
+        <h2 class="section-title" style="border:none;margin:0;padding:0;">Цикл ${room.cycle}</h2>
+        <span class="badge">${getSystemLabel(room)}</span>
+      </div>
+      <div class="players-strip mt8">
+        ${room.players.map(p=>{
+          const bonus = room.reformBonus[p.party]||0;
+          const bonusColor = bonus>0?'#8fd18a':(bonus<0?'#e07a72':'inherit');
+          const bonusStr = bonus>0?`+${bonus}`:`${bonus}`;
+          return `
+          <div class="player-chip ${room.phase===1 && room.turnOrder[room.turnIndex]===p.id ? 'turn':''}">
+            ${miniLogo(p.party,14)} ${p.name}${p.isBot?' 🤖':''} <span class="mono">₽${room.budgets[p.id]}</span> <span class="mono" style="color:${bonusColor}">(${bonusStr})</span>
+          </div>
+        `;}).join('')}
+      </div>
+    </div>
+
+    <div class="game-grid">
+      <div class="game-col game-col-left">
+        ${renderAgendaPanel(meP)}
+        ${renderHistoryPanel()}
+        <div class="plaque">
+          <h2 class="section-title">Заметки</h2>
+          <textarea id="myNotes" class="notes-area" placeholder="Личные заметки — не сбрасываются до конца партии"></textarea>
+        </div>
+      </div>
+
+      <div class="game-col game-col-center">
+        <div class="parliament-wrap">
+          <div class="plabel">Парламент</div>
+          <div class="parliament-inner">
+            ${renderHemicycle(er?.seats||{})}
+            ${renderSeatBreakdown(er?.seats||{})}
+          </div>
+        </div>
+        ${room.phase===1 ? renderPhase1(meP) : ''}
+        ${room.phase===2 ? renderPhase2(meP) : ''}
+        ${room.phase===3 ? renderPhase3(meP) : ''}
+      </div>
+
+      <div class="game-col game-col-right">
+        <div class="plaque president-panel">
+          <h2 class="section-title" style="border:none;margin:0 0 8px;padding:0;font-size:14px;">${leaderTitle}</h2>
+          ${leaderParty ? `<div style="display:flex;align-items:center;gap:10px;">${standardSVG(leaderParty,50)}<b>${PARTIES[leaderParty].name}</b></div>` : `<p class="small">— пока нет —</p>`}
+          ${leaderParty && gov.length && sysDef.canLeaderDismissUnilaterally && meP && meP.party===leaderParty ? `<button id="dismissGovBtn" class="danger mt8">Распустить правительство</button>` : ''}
+        </div>
+        <div class="gov-bar-wrap">
+          <div class="glabel">Правительство (${GOV_SEATS_TOTAL} мест)</div>
+          <div class="gov-bar">
+            ${gov.length ? gov.map(k=>`<div class="gov-seg" style="width:${(govSeats[k]||0)/GOV_SEATS_TOTAL*100}%;background:${PARTIES[k].color}" title="${PARTIES[k].name}"></div>`).join('') : `<div class="gov-seg" style="width:100%;background:#241f18;"></div>`}
+          </div>
+        </div>
+        <div class="state-wrap">
+          <div class="slabel">Государство — настроения электората</div>
+          ${renderStateBlob(room.phase===1 ? room.support : (er?.seats||{}))}
+          <div class="state-legend">
+            ${room.players.map(p=>`<div class="legend-item">${miniLogo(p.party,13)}${PARTIES[p.party].name}</div>`).join('')}
+            <div class="legend-item"><span class="legend-dot" style="background:#8a8272"></span>Не определились</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="plaque game-log-section">
+      <h2 class="section-title">Журнал событий</h2>
+      <div class="log" data-scroll-id="eventLog">${room.log.slice().reverse().map(l=>`<div>${l}</div>`).join('') || '<div class="small">Пока тихо</div>'}</div>
+    </div>
+  `;
+}
+
+function renderPhase1(meP){
+  const isMyTurn = room.turnOrder[room.turnIndex]===me.id;
+  const hasPassed = room.passed.includes(me.id);
+  const hand = room.hands[me.id] || [];
+  const frozenIds = (room.frozenCardIds && room.frozenCardIds[me.id]) || [];
+
+  if(discreditPicker && meP){
+    const {card} = discreditPicker;
+    const targets = validTargets(card, meP.party);
+    return `<div class="plaque">
+      <h2 class="section-title">Против кого сыграть «${card.name}»?</h2>
+      <div class="standards-row">
+        ${targets.map(p=>`<div class="standard selected" data-target="${p.party}">
+          ${standardSVG(p.party,68)}<div class="pname">${p.name}<br>${PARTIES[p.party].name}</div>
+        </div>`).join('')}
+      </div>
+      <button id="cancelDiscreditBtn" class="secondary mt16">Отмена</button>
+    </div>`;
+  }
+
+  return `
+    <div class="plaque">
+      <h2 class="section-title">Ваша рука ${isMyTurn && !hasPassed ? '— ваш ход' : ''}</h2>
+      ${!meP ? `<p class="small">Вы наблюдатель в этой партии.</p>` : `
+        ${hasPassed ? `<p class="small">Вы закончили ход в этом цикле.</p>` :
+          !isMyTurn ? `<p class="small">Ждём хода: ${room.players.find(p=>p.id===room.turnOrder[room.turnIndex])?.name}. Ваши карты остаются на месте — играйте на своём ходу.</p>` :
+          `<p class="small">Разыгрывайте карты, пока хватает бюджета. Снежинкой можно заморозить до 3 карт — они перейдут в следующий цикл (заморожено: ${frozenIds.length}/3).</p>`
+        }
+        <div class="card-grid">
+          ${hand.map(c=>{
+            const affordable = room.budgets[me.id] >= c.cost;
+            const hasTarget = c.type==='discredit' ? validTargets(c, meP.party).length>0 : true;
+            const playable = isMyTurn && !hasPassed && affordable && hasTarget;
+            const frozen = frozenIds.includes(c.handId);
+            return `<div class="playcard ${c.type} ${c.rarity==='rare'?'rare':''} ${playable?'':'disabled'} ${frozen?'frozen':''}" data-play="${c.handId}">
+              <div class="cost-gem">${c.cost}</div>
+              <div class="freeze-toggle" data-freeze="${c.handId}" title="Заморозить на след. цикл">${frozen?'❄':'❆'}</div>
+              <div class="playcard-inner">
+                <div class="pc-kind">${c.moneyCard?'Финансирование':(c.type==='agitation'?'Агитация':'Дискредитация')}</div>
+                <div class="pc-title">${c.name}</div>
+                ${c.type==='discredit' && !hasTarget ? `<div class="small" style="color:#e07a72;">нет подходящей цели</div>` : ''}
+                <div class="pc-bottom">
+                  <span class="value-badge" style="${c.moneyCard?'color:#e8c96b':''}">${c.moneyCard?'+₽':(c.type==='agitation'?'+':'−')}${c.value}</span>
+                  <span class="bonus-dots">${(c.bonus||[]).map(b=>`<span class="bonus-dot" style="background:${PARTIES[b].color}" title="${PARTIES[b].name}"></span>`).join('')}</span>
+                </div>
+              </div>
+            </div>`;
+          }).join('')}
+        </div>
+        ${isMyTurn && !hasPassed ? `<div class="row mt16"><button id="passBtn">Закончить ход</button><button id="handOffBtn" class="secondary">Передать ход</button></div>` : ''}
+      `}
+    </div>
+  `;
+}
+
+function renderPhase2(meP){
+  const er = room.electionResult;
+  if(!er) return `<div class="plaque"><div class="waiting">Считаем голоса…</div></div>`;
+  const sysDef = getSysDef(room);
+
+  if(sysDef.hasPresident && !er.president){
+    return `<div class="plaque">
+      <h2 class="section-title">Президентские выборы впереди</h2>
+      <p class="small">Состав парламента определён. Президентские выборы проводятся отдельно и гораздо менее предсказуемы.</p>
+      ${room.hostId===me.id ? `<button id="runPresBtn" class="mt16">Провести президентские выборы →</button>` : `<p class="small">Ждём хоста…</p>`}
+    </div>`;
+  }
+
+  const leaderParty = getLeaderParty(room);
+  const leaderTitle = sysDef.hasPresident ? 'Президент' : 'Премьер-министр';
+  if(!leaderParty){
+    return `<div class="plaque"><p class="small">Ни одна партия не набрала мандатов — сформировать власть невозможно.</p></div>`;
+  }
+  const invited = er.invited && er.invited.length ? er.invited : [leaderParty];
+  const govSeats = er.govSeats || {[leaderParty]:GOV_SEATS_TOTAL};
+  const distributed = Object.values(govSeats).reduce((a,b)=>a+b,0);
+  const isLeaderPlayer = meP && meP.party===leaderParty;
+
+  if(er.government){
+    return `<div class="plaque">
+      <h2 class="section-title">Правительство сформировано</h2>
+      <p class="small">${er.government.map(k=>`${PARTIES[k].name} — ${govSeats[k]} мест`).join(', ')}</p>
+      ${room.hostId===me.id ? `<button id="toPhase3Btn" class="mt16">К законодательному процессу →</button>` : `<p class="small">Ждём хоста…</p>`}
+    </div>`;
+  }
+  return `<div class="plaque">
+    <h2 class="section-title">Формирование правительства (${GOV_SEATS_TOTAL} мест)</h2>
+    <p class="small">${leaderTitle} — <b style="color:${PARTIES[leaderParty].color}">${PARTIES[leaderParty].name}</b>. ${isLeaderPlayer? 'Распределите все места в правительстве — можно включить и проигравших:' : `Ждём, пока ${leaderTitle.toLowerCase()} распределит места.`}</p>
+    <div class="majority-meter"><div class="majority-fill" style="width:${Math.min(100,distributed/GOV_SEATS_TOTAL*100)}%"></div></div>
+    <p class="small">${distributed} из ${GOV_SEATS_TOTAL} мест распределено</p>
+    <div class="gov-form-row">
+      <div class="gov-chip locked">${miniLogo(leaderParty,15)}${PARTIES[leaderParty].name} · ${leaderTitle.toLowerCase()}</div>
+      ${PARTY_KEYS.filter(k=>k!==leaderParty && (er.seats[k]||0)>0 && !invited.includes(k)).map(k=>`
+        <div class="gov-chip ${isLeaderPlayer?'':'readonly'}" ${isLeaderPlayer?`data-invite="${k}"`:''}>
+          ${miniLogo(k,15)}${PARTIES[k].name} (${er.seats[k]} манд.)
+        </div>
+      `).join('')}
+    </div>
+    ${isLeaderPlayer ? `
+      <div class="gov-stepper-list">
+        ${invited.map(k=>`
+          <div class="gov-stepper-row">
+            ${miniLogo(k,16)}<span style="flex:1">${PARTIES[k].name}</span>
+            <button class="stepper-btn secondary" data-govdec="${k}">−</button>
+            <span class="mono" style="width:26px;text-align:center;">${govSeats[k]||0}</span>
+            <button class="stepper-btn secondary" data-govinc="${k}">+</button>
+            ${k!==leaderParty ? `<button class="secondary" data-uninvite="${k}">убрать</button>` : ''}
+          </div>
+        `).join('')}
+      </div>
+      <button id="confirmGovBtn" class="mt16" ${distributed!==GOV_SEATS_TOTAL?'disabled':''}>Сформировать правительство (${distributed}/${GOV_SEATS_TOTAL})</button>
+    ` : ''}
+  </div>`;
+}
+
+function renderVotingPanel(pending){
+  const meP = room.players.find(p=>p.id===me.id);
+  const weightMap = pending.kind==='reform' ? (room.electionResult.govSeats||{}) : room.electionResult.seats;
+  const eligible = room.players.filter(p=>(weightMap[p.party]||0)>0);
+  const myVote = meP ? pending.votes[meP.id] : undefined;
+  const iCanVote = meP && (weightMap[meP.party]||0)>0 && myVote===undefined;
+  const kindLabel = pending.kind==='law' ? 'Законопроект' : (pending.kind==='reform_confirm' ? 'Утверждение реформы парламентом' : 'Реформа');
+  return `
+    <div class="vote-panel">
+      <div class="vote-kind">${kindLabel} · внесла ${PARTIES[pending.by].name}</div>
+      <div class="vote-title">${pending.title}</div>
+      <div class="vote-status-row">
+        ${eligible.map(p=>{
+          const v = pending.votes[p.id];
+          const voted = v!==undefined;
+          let icon = '…';
+          if(voted){
+            if(v==='yes') icon = '<span style="color:#8fd18a">✓</span>';
+            else if(v==='no') icon = '<span style="color:#e07a72">✗</span>';
+            else icon = '<span style="color:#9a8f6f">—</span>';
+          }
+          return `<div class="vote-status-chip ${voted?'voted':''}">${miniLogo(p.party,14)}${p.name} ${icon}</div>`;
+        }).join('')}
+      </div>
+      ${iCanVote ? `
+        <div class="vote-buttons">
+          <button class="vote-yes" data-vote="yes">За</button>
+          <button class="vote-no" data-vote="no">Против</button>
+          <button class="vote-abstain" data-vote="abstain">Воздержаться / закончить ход</button>
+        </div>
+      ` : myVote!==undefined ? `<p class="small">Вы проголосовали. Ждём остальных…</p>` : `<p class="small">Ваша партия не участвует в этом голосовании.</p>`}
+    </div>
+  `;
+}
+
+function renderPresidentialApprovalPanel(pa, meP){
+  const sysDef = getSysDef(room);
+  const leaderParty = getLeaderParty(room);
+  const leaderTitle = sysDef.hasPresident ? 'президенту' : 'премьер-министру';
+  const isLeader = meP && meP.party===leaderParty;
+  return `<div class="vote-panel">
+    <div class="vote-kind">На подпись ${leaderTitle}</div>
+    <div class="vote-title">${pa.title}</div>
+    <p class="small">Парламент одобрил ${pa.yesSeats} из ${pa.totalSeats} мандатов.</p>
+    ${isLeader ? `
+      <div class="vote-buttons">
+        <button class="vote-yes" id="signBtn">Подписать</button>
+        <button class="vote-no" id="vetoBtn">Наложить вето</button>
+      </div>
+    ` : `<p class="small">Ждём решения (${leaderParty?PARTIES[leaderParty].name:'—'})…</p>`}
+  </div>`;
+}
+
+function renderPhase3(meP){
+  const er = room.electionResult;
+  const sysDef = getSysDef(room);
+  const item = room.phase3Queue[room.phase3QueueIndex] || null;
+  const pending = room.pendingAction;
+  const presApproval = room.pendingPresidentialApproval;
+  let body;
+  if(presApproval){
+    body = renderPresidentialApprovalPanel(presApproval, meP);
+  } else if(pending){
+    body = renderVotingPanel(pending);
+  } else if(!item){
+    body = `<p class="small">Повестка цикла исчерпана.</p>
+      ${room.hostId===me.id ? `<button id="endCycleBtn" class="danger mt16">Завершить цикл → к фазе 1</button>` : `<p class="small">Ждём хоста…</p>`}`;
+  } else {
+    const actingPlayer = room.players.find(p=>p.party===item.party);
+    const isMe = actingPlayer && actingPlayer.id===me.id;
+    if(!isMe){
+      body = `<p class="small">Ход: ${actingPlayer?actingPlayer.name:'—'} (${PARTIES[item.party].name}) — ${item.kind==='law'?'вносит законопроект':'предлагает реформу'}</p>`;
+    } else if(item.kind==='law'){
+      const myChecklist = LAWS_BY_PARTY[item.party];
+      const availableNow = (room.availableLaws||[]).filter(l=>!room.allPassedLaws.includes(l) && !room.proposedThisCycle.includes(l));
+      const options = availableNow.map(l=>{
+        const otherLawDef = OTHER_LAWS.find(o=>o.name===l);
+        if(otherLawDef){
+          if(otherLawDef.kind==='noConfidence' && !sysDef.canParliamentDismiss) return null;
+          return {value:l, group:'Прочие законы (2/3 голосов)'};
+        }
+        return myChecklist.includes(l)
+          ? {value:l, group:'Ваша повестка (нужна для победы)', needed:true}
+          : {value:l, group:'Повестка других партий'};
+      }).filter(Boolean);
+      body = options.length===0
+        ? `<p class="small">В этом цикле среди доступных законов нет подходящих для внесения.</p><button id="skipQueueBtn" class="secondary mt16">Передать ход</button>`
+        : renderProposalPicker('law', options);
+    } else {
+      if(!er.government){
+        body = `<p class="small">Правительство в отставке — реформа невозможна.</p><button id="skipQueueBtn" class="secondary mt16">Передать ход</button>`;
+      } else {
+        const avail = REFORMS.filter(rf=>(room.availableReforms||[]).includes(rf.name) && !room.proposedThisCycle.includes(rf.name));
+        const options = avail.map(rf=>({value:rf.name, desc:rf.desc}));
+        body = options.length===0
+          ? `<p class="small">Реформы этого цикла уже рассмотрены.</p><button id="skipQueueBtn" class="secondary mt16">Передать ход</button>`
+          : renderProposalPicker('reform', options);
+      }
+    }
+  }
+  return `
+    <div class="plaque">
+      <h2 class="section-title">Действия цикла ${room.cycle}</h2>
+      ${room.cycleActions.length ? room.cycleActions.map(l=>`
+        <div class="law-item">
+          <div class="flex-between"><b>${l.title}</b><span class="badge">${l.kind==='law'?'закон':'реформа'} · ${l.result==='passed'?'принят':(l.result==='vetoed'?'вето':(l.result==='reversed'?'отменён вотумом':'отклонён'))}</span></div>
+          <div class="small">Внёс: ${PARTIES[l.by].name} · ${l.yesSeats}/${l.totalSeats} «за»</div>
+        </div>
+      `).join('') : `<p class="small">Пока ничего не рассмотрено</p>`}
+    </div>
+    <div class="plaque">
+      <h2 class="section-title">${presApproval ? 'Подпись' : (pending ? (pending.kind==='law'?'Голосование по закону':(pending.kind==='reform_confirm'?'Утверждение парламентом':'Голосование по реформе')) : 'Ход')}</h2>
+      ${body}
+    </div>
+  `;
+}
+
+function renderProposalPicker(kind, options){
+  return `
+    <label>Выберите ${kind==='law'?'законопроект':'реформу'} для внесения</label>
+    <div class="proposal-list" data-scroll-id="proposalList">
+      ${options.map(opt=>`
+        <div class="proposal-row ${selectedProposalTitle===opt.value?'selected':''} ${opt.needed?'needed':''}" data-choose="${opt.value}">
+          ${opt.group?`<span class="proposal-group">${opt.group}</span>`:''}
+          <span>${opt.value}</span>
+          ${opt.desc?`<span class="proposal-desc">${opt.desc}</span>`:''}
+        </div>
+      `).join('')}
+    </div>
+    <div class="row mt16">
+      <button id="proposeItemBtn" ${!selectedProposalTitle?'disabled':''}>Внести на голосование</button>
+      <button id="skipQueueBtn" class="secondary">Не вносить, передать ход</button>
+    </div>
+  `;
+}
+
+/* ============================== SHARED RESOLUTION ============================== */
+
+function resolvePendingIfComplete(r){
+  if(!r.pendingAction) return;
+  const kind = r.pendingAction.kind;
+  const weightMap = kind==='reform' ? (r.electionResult.govSeats||{}) : r.electionResult.seats;
+  const eligible = r.players.filter(pl=>(weightMap[pl.party]||0)>0);
+  const allVoted = eligible.every(pl=>r.pendingAction.votes[pl.id]!==undefined);
+  if(!allVoted) return;
+  const { title, by } = r.pendingAction;
+  let yesSeats=0, noSeats=0;
+  eligible.forEach(pl=>{
+    const v=r.pendingAction.votes[pl.id];
+    if(v==='yes') yesSeats+=weightMap[pl.party];
+    else if(v==='no') noSeats+=weightMap[pl.party];
+  });
+  const totalSeatsW = Object.values(weightMap).reduce((a,b)=>a+b,0);
+  const otherLaw = kind==='law' ? OTHER_LAWS.find(c=>c.name===title) : null;
+  const isSupermajority = otherLaw && otherLaw.supermajority;
+  const passThreshold = isSupermajority ? totalSeatsW*2/3 : totalSeatsW/2;
+  const passed = yesSeats > passThreshold;
+  let nextPending = null;
+
+  if(kind==='law'){
+    if(passed){
+      if(otherLaw && otherLaw.kind==='impeachment'){
+        applyImpeachment(r);
+        r.proposedThisCycle.push(title);
+        r.cycleActions.push({kind:'law', title, by, result:'passed', yesSeats, noSeats, totalSeats:totalSeatsW});
+        r.passedHistory = r.passedHistory||[];
+        r.passedHistory.push({kind:'law', title, by, cycle:r.cycle});
+        r.phase3QueueIndex += 1;
+      } else if(!getLeaderParty(r)){
+        if(!r.allPassedLaws.includes(title)) r.allPassedLaws.push(title);
+        r.proposedThisCycle.push(title);
+        r.cycleActions.push({kind:'law', title, by, result:'passed', yesSeats, noSeats, totalSeats:totalSeatsW});
+        r.passedHistory = r.passedHistory||[];
+        r.passedHistory.push({kind:'law', title, by, cycle:r.cycle});
+        checkVictory(r);
+        r.phase3QueueIndex += 1;
+      } else {
+        r.pendingPresidentialApproval = { title, by, specialKind: otherLaw?otherLaw.kind:null, yesSeats, noSeats, totalSeats: totalSeatsW };
+        r.log.push(`Парламент одобрил «${title}» (${yesSeats}/${totalSeatsW}) — на подпись`);
+      }
+    } else {
+      r.proposedThisCycle.push(title);
+      r.cycleActions.push({kind:'law', title, by, result:'rejected', yesSeats, noSeats, totalSeats:totalSeatsW});
+      r.log.push(`Голосование «${title}»: ОТКЛОНЕНО (${yesSeats}/${totalSeatsW})`);
+      r.phase3QueueIndex += 1;
+    }
+    r.lastResolution = {kind, title, by, yesSeats, noSeats, totalSeats:totalSeatsW, passed, ts:Date.now()};
+  } else if(kind==='reform'){
+    if(passed){
+      if(r.systemTypeKey==='presidential'){
+        applyReformEffect(r, title, by);
+        r.proposedThisCycle.push(title);
+        r.cycleActions.push({kind:'reform', title, by, result:'passed', yesSeats, noSeats, totalSeats:totalSeatsW});
+        r.phase3QueueIndex += 1;
+      } else {
+        nextPending = { kind:'reform_confirm', title, by, votes:{} };
+        r.log.push(`Правительство одобрило реформу «${title}» (${yesSeats}/${totalSeatsW}) — на утверждение парламенту`);
+      }
+    } else {
+      r.proposedThisCycle.push(title);
+      r.cycleActions.push({kind:'reform', title, by, result:'rejected', yesSeats, noSeats, totalSeats:totalSeatsW});
+      r.phase3QueueIndex += 1;
+    }
+    r.lastResolution = {kind, title, by, yesSeats, noSeats, totalSeats:totalSeatsW, passed, ts:Date.now()};
+  } else if(kind==='reform_confirm'){
+    if(passed){ applyReformEffect(r, title, by); }
+    r.proposedThisCycle.push(title);
+    r.cycleActions.push({kind:'reform', title, by, result:passed?'passed':'rejected', yesSeats, noSeats, totalSeats:totalSeatsW});
+    r.lastResolution = {kind:'reform', title, by, yesSeats, noSeats, totalSeats:totalSeatsW, passed, ts:Date.now()};
+    r.phase3QueueIndex += 1;
+  }
+  r.pendingAction = nextPending;
+}
+
+function applyPresidentialDecision(r, approve){
+  const {title, by, specialKind, yesSeats, noSeats, totalSeats} = r.pendingPresidentialApproval;
+  if(approve){
+    if(specialKind==='noConfidence'){
+      reverseReformEffects(r);
+      if(r.electionResult){ r.electionResult.government=null; r.electionResult.govSeats={}; r.electionResult.invited=[]; }
+      r.governmentDismissedThisCycle = true;
+      r.log.push(`— Вотум недоверия принят: правительство в отставке, его реформы этого цикла отменены —`);
+    } else if(specialKind && specialKind.indexOf('system')===0){
+      const sysLawDef = OTHER_LAWS.find(s=>s.kind===specialKind);
+      if(sysLawDef){
+        r.pendingSystemChange = sysLawDef.targetKey;
+        r.log.push(`— Принят переход к системе «${sysLawDef.label}» — вступит в силу со следующего цикла —`);
+      }
+    } else {
+      if(!r.allPassedLaws.includes(title)) r.allPassedLaws.push(title);
+    }
+    r.log.push(`«${title}» подписан(о)`);
+    r.cycleActions.push({kind:'law', title, by, result:'passed', yesSeats, noSeats, totalSeats});
+    r.passedHistory = r.passedHistory||[];
+    r.passedHistory.push({kind:'law', title, by, cycle:r.cycle});
+    checkVictory(r);
+  } else {
+    r.log.push(`Наложено вето на «${title}»`);
+    r.cycleActions.push({kind:'law', title, by, result:'vetoed', yesSeats, noSeats, totalSeats});
+  }
+  r.proposedThisCycle.push(title);
+  r.pendingPresidentialApproval = null;
+  r.phase3QueueIndex += 1;
+}
+
+/* ============================== BOT AI ============================== */
+
+function botChoiceIndex(difficulty){
+  const roll = Math.random();
+  if(difficulty==='hard') return roll<0.7 ? 0 : Math.floor(Math.random()*3);
+  if(difficulty==='medium') return roll<0.4 ? 0 : Math.floor(Math.random()*3);
+  return -1; // fully random, caller picks any index
+}
+
+function botApplyCard(r, bot, card, targetParty){
+  const hand = r.hands[bot.id]||[];
+  r.budgets[bot.id]-=card.cost;
+  r.hands[bot.id]=hand.filter(c=>c.handId!==card.handId);
+  r.cardHistory[bot.party]=r.cardHistory[bot.party]||[];
+  if(!r.cardHistory[bot.party].includes(card.name)) r.cardHistory[bot.party].push(card.name);
+  if(card.type==='agitation'){
+    if(card.moneyCard){
+      r.budgets[bot.id]=(r.budgets[bot.id]||0)+card.value;
+      r.log.push(`${bot.name} (${PARTIES[bot.party].name}) разыграл(а) «${card.name}»: +₽${card.value}`);
+    } else {
+      let gain=card.value; if((card.bonus||[]).includes(bot.party)) gain+=1;
+      r.support[bot.party]=(r.support[bot.party]||0)+gain;
+      r.log.push(`${bot.name} (${PARTIES[bot.party].name}) разыграл(а) «${card.name}»: +${gain} поддержки`);
+    }
+  } else {
+    r.support[targetParty]=Math.max(0,(r.support[targetParty]||0)-card.value);
+    r.log.push(`${bot.name} (${PARTIES[bot.party].name}) разыграл(а) «${card.name}» против ${PARTIES[targetParty].name}: −${card.value}`);
+  }
+}
+
+async function botPlayPhase1(r, bot){
+  const hand = r.hands[bot.id]||[];
+  const playable = hand.filter(c=> r.budgets[bot.id]>=c.cost && (c.type==='agitation' || validTargetsFor(r,c,bot.party).length>0));
+  const passChance = bot.difficulty==='hard'?0.12:bot.difficulty==='medium'?0.25:0.4;
+  if(playable.length===0 || Math.random()<passChance){
+    if(!r.passed.includes(bot.id)) r.passed.push(bot.id);
+    r.log.push(`${bot.name} закончил(а) ход в фазе агитации`);
+    advanceTurn(r);
+  } else {
+    const sorted = [...playable].sort((a,b)=> (b.value/(b.cost||0.5)) - (a.value/(a.cost||0.5)));
+    const idx = botChoiceIndex(bot.difficulty);
+    const card = idx>=0 && idx<sorted.length ? sorted[idx] : sorted[Math.floor(Math.random()*sorted.length)];
+    let targetParty = null;
+    if(card.type==='discredit'){
+      const targets = validTargetsFor(r, card, bot.party);
+      if(!targets.length){ if(!r.passed.includes(bot.id)) r.passed.push(bot.id); advanceTurn(r); await saveRoom(r); room=r; if(me.id===room.hostId) render(); return; }
+      const byTarget = bot.difficulty==='hard' ? targets.sort((a,b)=>(r.support[b.party]||0)-(r.support[a.party]||0))[0] : targets[Math.floor(Math.random()*targets.length)];
+      targetParty = byTarget.party;
+    }
+    botApplyCard(r, bot, card, targetParty);
+  }
+  await saveRoom(r); room=r; if(me.id===room.hostId) render();
+}
+
+function botFormGovernment(r, leaderBot){
+  const er = r.electionResult;
+  const others = PARTY_KEYS.filter(k=>k!==leaderBot.party && (er.seats[k]||0)>0);
+  const invited=[leaderBot.party];
+  const govSeats={[leaderBot.party]:GOV_SEATS_TOTAL};
+  if(others.length && Math.random()<0.5){
+    const partner = others[Math.floor(Math.random()*others.length)];
+    const give = 2+Math.floor(Math.random()*4);
+    govSeats[leaderBot.party]-=give;
+    govSeats[partner]=give;
+    invited.push(partner);
+  }
+  er.invited=invited; er.govSeats=govSeats;
+  er.government = Object.keys(govSeats).filter(k=>govSeats[k]>0);
+  r.log.push(`— ${leaderBot.name} сформировал(а) правительство —`);
+}
+
+async function botCastVote(r, bot){
+  const pending = r.pendingAction;
+  const isOwn = pending.by===bot.party;
+  let choice;
+  if(isOwn) choice='yes';
+  else {
+    const yesChance = bot.difficulty==='hard'?0.25:bot.difficulty==='medium'?0.45:0.6;
+    const roll = Math.random();
+    choice = roll<yesChance ? 'yes' : (roll<yesChance+0.7*(1-yesChance) ? 'no' : 'abstain');
+  }
+  pending.votes[bot.id]=choice;
+  resolvePendingIfComplete(r);
+  await saveRoom(r); await applyRoomUpdate(r);
+}
+
+async function botPresidentialDecision(r, leaderBot){
+  const pa = r.pendingPresidentialApproval;
+  let approve;
+  if(pa.by===leaderBot.party) approve=true;
+  else {
+    const approveChance = leaderBot.difficulty==='hard'?0.35:leaderBot.difficulty==='medium'?0.55:0.7;
+    approve = Math.random()<approveChance;
+  }
+  applyPresidentialDecision(r, approve);
+  await saveRoom(r); room=r; if(me.id===room.hostId) render();
+}
+
+async function botPhase3Turn(r, item, bot){
+  const sysDef = getSysDef(r);
+  if(item.kind==='law'){
+    const myChecklist = LAWS_BY_PARTY[item.party];
+    const availableNow = (r.availableLaws||[]).filter(l=>!r.allPassedLaws.includes(l) && !r.proposedThisCycle.includes(l));
+    const proposable = availableNow.filter(l=>{
+      const ol = OTHER_LAWS.find(o=>o.name===l);
+      if(ol && ol.kind==='noConfidence' && !sysDef.canParliamentDismiss) return false;
+      return true;
+    });
+    const ownAvail = proposable.filter(l=>myChecklist.includes(l));
+    const skipChance = bot.difficulty==='hard'?0.1:0.25;
+    if(proposable.length===0 || Math.random()<skipChance){
+      r.log.push(`${bot.name} (${PARTIES[item.party].name}) передал(а) ход без внесения`);
+      r.phase3QueueIndex+=1;
+    } else {
+      const title = ownAvail.length ? ownAvail[Math.floor(Math.random()*ownAvail.length)] : proposable[Math.floor(Math.random()*proposable.length)];
+      r.pendingAction = {kind:'law', title, by:item.party, votes:{}};
+      r.log.push(`${bot.name} (${PARTIES[item.party].name}) выносит на голосование закон «${title}»`);
+    }
+  } else {
+    if(!r.electionResult.government){ r.phase3QueueIndex+=1; }
+    else {
+      const avail = REFORMS.filter(rf=>(r.availableReforms||[]).includes(rf.name) && !r.proposedThisCycle.includes(rf.name));
+      if(avail.length===0 || Math.random()<0.2){
+        r.log.push(`${bot.name} (${PARTIES[item.party].name}) передал(а) ход без внесения`);
+        r.phase3QueueIndex+=1;
+      } else {
+        const rf = avail[Math.floor(Math.random()*avail.length)];
+        r.pendingAction = {kind:'reform', title:rf.name, by:item.party, votes:{}};
+        r.log.push(`${bot.name} (${PARTIES[item.party].name}) выносит на голосование реформу «${rf.name}»`);
+      }
+    }
+  }
+  await saveRoom(r); room=r; if(me.id===room.hostId) render();
+}
+
+async function runBotTick(){
+  if(!room || room.hostId!==me.id || room.status!=='playing' || animatingReveal) return;
+  const r = await loadRoom(room.code);
+  if(!r || r.status!=='playing') return;
+
+  if(r.phase===1){
+    const currentPlayer = r.players.find(p=>p.id===r.turnOrder[r.turnIndex]);
+    if(currentPlayer && currentPlayer.isBot && !r.passed.includes(currentPlayer.id)){
+      await botPlayPhase1(r, currentPlayer);
+      return;
+    }
+  }
+  if(r.phase===2 && r.electionResult){
+    const leaderParty = getLeaderParty(r);
+    const leaderPlayer = r.players.find(p=>p.party===leaderParty);
+    if(leaderPlayer && leaderPlayer.isBot && !r.electionResult.government){
+      botFormGovernment(r, leaderPlayer);
+      await saveRoom(r); room=r; render();
+      return;
+    }
+  }
+  if(r.phase===3){
+    if(r.pendingPresidentialApproval){
+      const leaderParty = getLeaderParty(r);
+      const leaderPlayer = r.players.find(p=>p.party===leaderParty);
+      if(leaderPlayer && leaderPlayer.isBot){ await botPresidentialDecision(r, leaderPlayer); return; }
+    } else if(r.pendingAction){
+      const kind=r.pendingAction.kind;
+      const weightMap = kind==='reform' ? (r.electionResult.govSeats||{}) : r.electionResult.seats;
+      const pendingBot = r.players.find(p=>p.isBot && (weightMap[p.party]||0)>0 && r.pendingAction.votes[p.id]===undefined);
+      if(pendingBot){ await botCastVote(r, pendingBot); return; }
+    } else {
+      const item = r.phase3Queue[r.phase3QueueIndex];
+      if(item){
+        const actingPlayer = r.players.find(p=>p.party===item.party);
+        if(actingPlayer && actingPlayer.isBot){ await botPhase3Turn(r, item, actingPlayer); return; }
+      }
+    }
+  }
+}
+function startBotTicker(){
+  if(botTickTimer) clearInterval(botTickTimer);
+  botTickTimer = setInterval(runBotTick, 3000);
+}
+
+/* ============================== ACTIONS ============================== */
+
+async function applyRoomUpdate(r){
+  room = r;
+  if(r.electionResult && r.electionResult.ts && r.electionResult.ts!==lastAnimatedElectionTs){
+    lastAnimatedElectionTs = r.electionResult.ts;
+    await playElectionReveal(r.electionResult.votes, 'Оглашение результатов выборов', 'Подсчёт голосов');
+  } else if(r.electionResult && r.electionResult.presTs && r.electionResult.presTs!==lastAnimatedPresTs){
+    lastAnimatedPresTs = r.electionResult.presTs;
+    await playElectionReveal(r.electionResult.presidentVotes, 'Президентские выборы', 'Подсчёт голосов');
+  } else if(r.lastResolution && r.lastResolution.ts!==lastAnimatedResolutionTs){
+    lastAnimatedResolutionTs = r.lastResolution.ts;
+    await playResolutionReveal(r.lastResolution);
+  }
+  render();
+}
+
+async function refreshRoom(){
+  if(!me.roomCode || animatingReveal) return;
+  const r = await loadRoom(me.roomCode);
+  if(r){
+    if(!hasInitializedRevealTracking){
+      lastAnimatedElectionTs = (r.electionResult && r.electionResult.ts) || null;
+      lastAnimatedPresTs = (r.electionResult && r.electionResult.presTs) || null;
+      lastAnimatedResolutionTs = (r.lastResolution && r.lastResolution.ts) || null;
+      hasInitializedRevealTracking = true;
+    }
+    const changed = JSON.stringify(r) !== JSON.stringify(room);
+    if(view!=='game' && r.status==='playing') view='game';
+    if(view==='landing') view='lobby';
+    if(changed){ await applyRoomUpdate(r); }
+  } else {
+    render();
+  }
+}
+function startPolling(){
+  if(pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(refreshRoom, 2000);
+}
+
+function fmtNum(n){ try{ return n.toLocaleString('ru-RU'); }catch(e){ return String(n); } }
+
+function animateBar(elBar, elCount, target, maxForPct, ms){
+  return new Promise(resolve=>{
+    const start = performance.now();
+    function step(now){
+      const t = Math.min(1,(now-start)/ms);
+      const eased = 1-Math.pow(1-t,3);
+      const val = Math.round(target*eased);
+      elBar.style.width = (maxForPct? Math.min(100,val/maxForPct*100):0)+'%';
+      elCount.textContent = fmtNum(val);
+      if(t<1){ requestAnimationFrame(step); }
+      else { elCount.textContent=fmtNum(target); elBar.style.width=(maxForPct?Math.min(100,target/maxForPct*100):0)+'%'; resolve(); }
+    }
+    requestAnimationFrame(step);
+  });
+}
+
+function waitForClick(id){
+  return new Promise(resolve=>{
+    const el = document.getElementById(id);
+    if(!el){ resolve(); return; }
+    el.onclick = ()=>resolve();
+  });
+}
+
+async function playElectionReveal(votes, title, kicker){
+  animatingReveal=true;
+  if(pollTimer) clearInterval(pollTimer);
+  const parties = PARTY_KEYS.filter(k=>(votes[k]||0)>0);
+  const maxVotes = Math.max(1,...parties.map(k=>votes[k]));
+  document.getElementById('root').innerHTML = `
+    <div class="reveal-wrap">
+      <div class="reveal-kicker">${kicker}</div>
+      <div class="reveal-title">${title}</div>
+      ${parties.map(k=>`
+        <div class="reveal-bar-row">
+          <div class="reveal-name" style="color:${PARTIES[k].color}">${PARTIES[k].name}</div>
+          <div class="reveal-track"><div class="reveal-fill" id="ev-${k}" style="background:${PARTIES[k].color}"></div></div>
+          <div class="reveal-count" id="evc-${k}">0</div>
+        </div>
+      `).join('')}
+      <button id="revealContinueBtn" class="mt16" style="display:none;">Продолжить →</button>
+    </div>`;
+  await Promise.all(parties.map(k=>{
+    const bar=document.getElementById('ev-'+k), cnt=document.getElementById('evc-'+k);
+    return animateBar(bar,cnt,votes[k],maxVotes,6200);
+  }));
+  const btn = document.getElementById('revealContinueBtn');
+  if(btn) btn.style.display='';
+  await waitForClick('revealContinueBtn');
+  animatingReveal=false;
+  startPolling();
+}
+
+async function playResolutionReveal(res){
+  animatingReveal=true;
+  if(pollTimer) clearInterval(pollTimer);
+  document.getElementById('root').innerHTML = `
+    <div class="reveal-wrap">
+      <div class="reveal-kicker">${res.kind==='law'?'Голосование по закону':'Голосование по реформе'} · внесла ${PARTIES[res.by].name}</div>
+      <div class="reveal-title">${res.title}</div>
+      <div class="reveal-bar-row">
+        <div class="reveal-name" style="color:#8fd18a">За</div>
+        <div class="reveal-track"><div class="reveal-fill" id="rv-yes" style="background:#6aa06a"></div></div>
+        <div class="reveal-count" id="rvc-yes">0</div>
+      </div>
+      <div class="reveal-bar-row">
+        <div class="reveal-name" style="color:#e07a72">Против</div>
+        <div class="reveal-track"><div class="reveal-fill" id="rv-no" style="background:#a05252"></div></div>
+        <div class="reveal-count" id="rvc-no">0</div>
+      </div>
+      <div class="reveal-verdict" id="rvVerdict"></div>
+      <button id="revealContinueBtn" class="mt16" style="display:none;">Продолжить →</button>
+    </div>`;
+  const barYes=document.getElementById('rv-yes'), cntYes=document.getElementById('rvc-yes');
+  const barNo=document.getElementById('rv-no'), cntNo=document.getElementById('rvc-no');
+  await Promise.all([
+    animateBar(barYes,cntYes,res.yesSeats,res.totalSeats,3800),
+    animateBar(barNo,cntNo,res.noSeats,res.totalSeats,3800),
+  ]);
+  await sleep(400);
+  const verdict=document.getElementById('rvVerdict');
+  if(verdict){
+    verdict.textContent = res.passed? (res.kind==='law' ? 'ПАРЛАМЕНТ ОДОБРИЛ' : 'ПРИНЯТО') : 'ОТКЛОНЕНО';
+    verdict.classList.add('show', res.passed?'pass':'fail');
+  }
+  const btn = document.getElementById('revealContinueBtn');
+  if(btn) btn.style.display='';
+  await waitForClick('revealContinueBtn');
+  animatingReveal=false;
+  startPolling();
+}
+
+async function createRoom(name, systemTypeKey, botCount, botDifficulty){
+  const code = Math.random().toString(36).slice(2,6).toUpperCase();
+  me.name=name; me.roomCode=code;
+  const sysDef = SYSTEM_TYPES[systemTypeKey];
+  const players = [{id:me.id, name, party:null}];
+  for(let i=0;i<botCount;i++){
+    players.push({ id:'bot_'+uid(), name:`Бот ${i+1}`, party:null, isBot:true, difficulty:botDifficulty });
+  }
+  const state = {
+    code, systemTypeKey, status:'lobby', hostId: me.id,
+    players,
+    cycle:0, phase:1, turnOrder:[], turnIndex:0, firstMoveIndex:0,
+    budgets:{}, hands:{}, support:{}, passed:[], cardHistory:{}, frozenCardIds:{},
+    electoralThreshold: sysDef.threshold, budgetPerCycle: START_BUDGET,
+    electoralFormula: sysDef.formula, pendingSystemChange:null,
+    turnout:50, availableReforms:[], availableLaws:[], governmentDismissedThisCycle:false,
+    electionResult:null, allPassedLaws:[], proposedThisCycle:[], cycleActions:[],
+    reformBonus:{}, pendingAction:null, pendingPresidentialApproval:null,
+    phase3Queue:[], phase3QueueIndex:0, lastResolution:null, passedHistory:[],
+    currentEvent:null, currentEventDesc:null, lastPresident:null, winners:null,
+    log:[`Комната ${code} создана (${sysDef.label})`],
+  };
+  await saveRoom(state);
+  room=state; view='lobby'; startPolling(); startBotTicker(); render();
+}
+
+async function joinRoom(name, code){
+  code = code.trim().toUpperCase();
+  const r = await loadRoom(code);
+  if(!r){ uiError='Комната не найдена. Проверьте код.'; render(); return; }
+  if(r.status!=='lobby'){
+    const existing = r.players.find(p=>!p.isBot && p.name===name);
+    if(!existing){ uiError='Игра в этой комнате уже началась. Чтобы переподключиться, введите то же имя, под которым вы играли.'; render(); return; }
+    me.id = existing.id;
+    me.name=name; me.roomCode=code;
+    room=r; view='game'; uiError='';
+    hasInitializedRevealTracking = false;
+    startPolling(); startBotTicker(); render();
+    return;
+  }
+  if(!r.players.some(p=>p.id===me.id)){
+    r.players.push({id:me.id, name, party:null});
+    r.log.push(`${name} присоединился(-лась) к комнате`);
+  }
+  me.name=name; me.roomCode=code;
+  await saveRoom(r);
+  room=r; view='lobby'; uiError=''; startPolling(); startBotTicker(); render();
+}
+
+async function choosePartyAction(partyKey){
+  const r = await loadRoom(room.code);
+  if(!r) return;
+  const taken = r.players.find(p=>p.party===partyKey && p.id!==me.id);
+  if(taken) return;
+  const p = r.players.find(p=>p.id===me.id);
+  if(p) p.party = partyKey;
+  await saveRoom(r); room=r; render();
+}
+
+function rotatedTurnOrder(r){
+  const n = r.players.length;
+  const offset = n ? (r.firstMoveIndex||0) % n : 0;
+  const ids = r.players.map(p=>p.id);
+  return ids.slice(offset).concat(ids.slice(0,offset));
+}
+
+async function startGameAction(){
+  const r = await loadRoom(room.code);
+  if(!r) return;
+  const unclaimed = PARTY_KEYS.filter(k=>!r.players.some(p=>p.party===k));
+  r.players.forEach(p=>{
+    if(p.isBot && !p.party && unclaimed.length){
+      const idx = Math.floor(Math.random()*unclaimed.length);
+      p.party = unclaimed.splice(idx,1)[0];
+    }
+  });
+  r.status='playing';
+  r.cycle=1; r.phase=1;
+  r.firstMoveIndex = 0;
+  r.turnOrder = rotatedTurnOrder(r);
+  r.turnIndex = 0;
+  r.support = {}; r.passed=[];
+  drawAndApplyEvent(r);
+  updateTurnout(r);
+  rollReforms(r);
+  r.players.forEach(p=>{ r.budgets[p.id]=r.budgetPerCycle; r.hands[p.id]=dealHand(); r.support[p.party]=0; r.frozenCardIds[p.id]=[]; });
+  r.log.push(`— Цикл 1 начался. На повестке: ${r.currentEvent}. Фаза 1: агитация. —`);
+  await saveRoom(r); room=r; view='game'; render();
+}
+
+async function playCardAction(handId, targetParty){
+  const r = await loadRoom(room.code);
+  if(!r) return;
+  if(r.turnOrder[r.turnIndex]!==me.id) return;
+  if(r.passed.includes(me.id)) return;
+  const p = r.players.find(p=>p.id===me.id);
+  const hand = r.hands[me.id]||[];
+  const card = hand.find(c=>c.handId===handId);
+  if(!card || r.budgets[me.id] < card.cost) return;
+  if(card.type==='discredit'){
+    if(!targetParty) return;
+    const targetOk = r.players.some(pl=>pl.party===targetParty && pl.id!==me.id) && cardMeetsPrereq(card, targetParty, r);
+    if(!targetOk) return;
+  }
+  botApplyCard(r, p, card, targetParty);
+  r.frozenCardIds[me.id] = (r.frozenCardIds[me.id]||[]).filter(id=>id!==handId);
+  if(card.type==='agitation'){
+    flashBadge(card.moneyCard?('+₽'+card.value):('+'+((card.bonus||[]).includes(p.party)?card.value+1:card.value)), card.moneyCard?'#e8c96b':PARTIES[p.party].color);
+  } else {
+    flashBadge('−'+card.value, '#e07a72');
+  }
+  await saveRoom(r); room=r; render();
+}
+
+function handleCardClick(handId){
+  const hand = room.hands[me.id]||[];
+  const card = hand.find(c=>c.handId===handId);
+  if(!card) return;
+  const cardEl = document.querySelector(`[data-play="${handId}"]`);
+  if(cardEl) cardEl.classList.add('card-playing');
+  if(card.type==='agitation'){
+    setTimeout(()=>{ playCardAction(handId, null); }, 380);
+  } else {
+    setTimeout(()=>{ discreditPicker={handId, card}; render(); }, 380);
+  }
+}
+function chooseDiscreditTarget(targetParty){
+  if(!discreditPicker) return;
+  const handId = discreditPicker.handId;
+  discreditPicker=null;
+  playCardAction(handId, targetParty);
+}
+function flashBadge(text, color){
+  const el=document.createElement('div');
+  el.className='flash-badge';
+  el.textContent=text;
+  el.style.color=color;
+  document.body.appendChild(el);
+  requestAnimationFrame(()=>{ requestAnimationFrame(()=>{ el.classList.add('rise'); }); });
+  setTimeout(()=>{ el.remove(); }, 1100);
+}
+
+async function toggleFreezeAction(handId){
+  const r = await loadRoom(room.code);
+  if(!r) return;
+  r.frozenCardIds[me.id] = r.frozenCardIds[me.id]||[];
+  const idx = r.frozenCardIds[me.id].indexOf(handId);
+  if(idx>=0){ r.frozenCardIds[me.id].splice(idx,1); }
+  else {
+    if(r.frozenCardIds[me.id].length>=3) return;
+    if(!(r.hands[me.id]||[]).some(c=>c.handId===handId)) return;
+    r.frozenCardIds[me.id].push(handId);
+  }
+  await saveRoom(r); room=r; render();
+}
+
+async function passAction(){
+  const r = await loadRoom(room.code);
+  if(!r) return;
+  if(r.turnOrder[r.turnIndex]!==me.id) return;
+  if(!r.passed.includes(me.id)) r.passed.push(me.id);
+  const p=r.players.find(p=>p.id===me.id);
+  r.log.push(`${p.name} закончил(а) ход в фазе агитации`);
+  advanceTurn(r);
+  await saveRoom(r); await applyRoomUpdate(r);
+}
+
+async function handOffTurnAction(){
+  const r = await loadRoom(room.code);
+  if(!r) return;
+  if(r.turnOrder[r.turnIndex]!==me.id) return;
+  if(r.passed.includes(me.id)) return;
+  const p=r.players.find(p=>p.id===me.id);
+  r.log.push(`${p.name} передал(а) ход`);
+  advanceTurn(r);
+  await saveRoom(r); await applyRoomUpdate(r);
+}
+
+function advanceTurn(r){
+  const active = r.players.filter(p=>!r.passed.includes(p.id));
+  if(active.length===0){ runElection(r); return; }
+  let next = (r.turnIndex+1) % r.turnOrder.length;
+  let guard=0;
+  while(r.passed.includes(r.turnOrder[next]) && guard<r.turnOrder.length+1){
+    next = (next+1)%r.turnOrder.length; guard++;
+  }
+  r.turnIndex=next;
+}
+
+function runElection(r){
+  const turnoutFactor = (r.turnout||50)/50;
+  const shares = {};
+  PARTY_KEYS.forEach(k=>{
+    if(r.players.some(p=>p.party===k)){
+      const base = (r.support[k]||0)+(r.reformBonus[k]||0);
+      const swing = 0.6 + Math.random()*0.8;
+      const chaos = Math.random()*12*turnoutFactor;
+      shares[k] = Math.max(0.5, base*swing + chaos);
+    }
+  });
+  const votingPop = Math.round(TOTAL_POPULATION*(r.turnout||50)/100);
+  const totalShare = Object.values(shares).reduce((a,b)=>a+b,0)||1;
+  const votes = {};
+  Object.keys(shares).forEach(k=>{ votes[k]=Math.round(votingPop*shares[k]/totalShare); });
+  const seats = allocateSeats(votes, TOTAL_SEATS, r.electoralFormula, r.electoralThreshold);
+  r.electionResult = {votes, seats, president:null, presidentVotes:null, government:null, invited:[], govSeats:{}, ts:Date.now(), presTs:null};
+  const sysDef = getSysDef(r);
+  if(!sysDef.hasPresident){
+    const leader = getLeaderParty(r);
+    if(leader){ r.electionResult.invited=[leader]; r.electionResult.govSeats={[leader]:GOV_SEATS_TOTAL}; r.lastPresident=leader; }
+    r.reformBonus = {};
+  }
+  r.phase=2;
+  r.log.push(`— Парламентские выборы завершены (явка ${r.turnout}%, ${fmtNum(votingPop)} чел.) —`);
+}
+
+function runPresidentialElection(r){
+  const turnoutFactor = (r.turnout||50)/50;
+  const shares = {};
+  PARTY_KEYS.forEach(k=>{
+    if(r.players.some(p=>p.party===k)){
+      const base = (r.support[k]||0)+(r.reformBonus[k]||0);
+      const swing = 0.4 + Math.random()*1.2;
+      const chaos = Math.random()*25*turnoutFactor;
+      shares[k] = Math.max(0.5, base*swing + chaos);
+    }
+  });
+  const votingPop = Math.round(TOTAL_POPULATION*(r.turnout||50)/100);
+  const totalShare = Object.values(shares).reduce((a,b)=>a+b,0)||1;
+  const pvotes = {};
+  Object.keys(shares).forEach(k=>{ pvotes[k]=Math.round(votingPop*shares[k]/totalShare); });
+  const presidentParty = Object.entries(pvotes).sort((a,b)=>b[1]-a[1])[0]?.[0] || null;
+  r.electionResult.presidentVotes = pvotes;
+  r.electionResult.president = presidentParty;
+  r.electionResult.invited = presidentParty ? [presidentParty] : [];
+  r.electionResult.govSeats = presidentParty ? {[presidentParty]:GOV_SEATS_TOTAL} : {};
+  r.electionResult.presTs = Date.now();
+  r.lastPresident = presidentParty;
+  r.reformBonus = {};
+  r.log.push(`— Президентские выборы завершены. Президент: ${presidentParty?PARTIES[presidentParty].name:'—'} —`);
+}
+
+let presElectionInFlight = false;
+async function runPresidentialElectionAction(){
+  if(presElectionInFlight) return;
+  presElectionInFlight = true;
+  try{
+    const r = await loadRoom(room.code);
+    if(!r || !r.electionResult || r.electionResult.president) return;
+    runPresidentialElection(r);
+    await saveRoom(r); await applyRoomUpdate(r);
+  } finally {
+    presElectionInFlight = false;
+  }
+}
+
+async function toggleInviteAction(partyKey){
+  const r = await loadRoom(room.code);
+  if(!r || !r.electionResult || r.electionResult.government) return;
+  const leaderParty = getLeaderParty(r);
+  const meParty = (r.players.find(p=>p.id===me.id)||{}).party;
+  if(leaderParty !== meParty) return;
+  const er = r.electionResult;
+  er.invited = er.invited && er.invited.length ? er.invited : [leaderParty];
+  er.govSeats = er.govSeats||{};
+  if(!er.invited.includes(partyKey)){ er.invited.push(partyKey); er.govSeats[partyKey]=0; }
+  await saveRoom(r); room=r; render();
+}
+async function removeInviteAction(partyKey){
+  const r = await loadRoom(room.code);
+  if(!r || !r.electionResult || r.electionResult.government) return;
+  const leaderParty = getLeaderParty(r);
+  const meParty = (r.players.find(p=>p.id===me.id)||{}).party;
+  if(leaderParty !== meParty || partyKey===leaderParty) return;
+  const er = r.electionResult;
+  er.invited = (er.invited||[]).filter(k=>k!==partyKey);
+  delete er.govSeats[partyKey];
+  await saveRoom(r); room=r; render();
+}
+async function adjustGovSeatsAction(partyKey, delta){
+  const r = await loadRoom(room.code);
+  if(!r || !r.electionResult || r.electionResult.government) return;
+  const leaderParty = getLeaderParty(r);
+  const meParty = (r.players.find(p=>p.id===me.id)||{}).party;
+  if(leaderParty !== meParty) return;
+  const er = r.electionResult;
+  er.govSeats = er.govSeats||{};
+  if(!(er.invited||[]).includes(partyKey)) return;
+  const current = er.govSeats[partyKey]||0;
+  const others = Object.entries(er.govSeats).filter(([k])=>k!==partyKey).reduce((s,[,v])=>s+v,0);
+  er.govSeats[partyKey] = Math.max(0, Math.min(GOV_SEATS_TOTAL-others, current+delta));
+  await saveRoom(r); room=r; render();
+}
+async function confirmGovernmentAction(){
+  const r = await loadRoom(room.code);
+  if(!r || !r.electionResult || r.electionResult.government) return;
+  const leaderParty = getLeaderParty(r);
+  const meParty = (r.players.find(p=>p.id===me.id)||{}).party;
+  if(leaderParty !== meParty) return;
+  const er = r.electionResult;
+  const total = Object.values(er.govSeats||{}).reduce((a,b)=>a+b,0);
+  if(total!==GOV_SEATS_TOTAL) return;
+  er.government = Object.keys(er.govSeats).filter(k=>er.govSeats[k]>0);
+  r.log.push(`— Правительство сформировано: ${er.government.map(k=>`${PARTIES[k].name} ${er.govSeats[k]}`).join(', ')} —`);
+  await saveRoom(r); room=r; render();
+}
+async function dismissGovernmentAction(){
+  const r = await loadRoom(room.code);
+  if(!r || !r.electionResult || !r.electionResult.government) return;
+  const sysDef = getSysDef(r);
+  if(!sysDef.canLeaderDismissUnilaterally) return;
+  const leaderParty = getLeaderParty(r);
+  const meParty = (r.players.find(p=>p.id===me.id)||{}).party;
+  if(leaderParty !== meParty) return;
+  reverseReformEffects(r);
+  r.electionResult.government=null; r.electionResult.govSeats={}; r.electionResult.invited=[];
+  r.governmentDismissedThisCycle = true;
+  r.log.push(`— ${sysDef.hasPresident?'Президент':'Премьер-министр'} распустил(а) правительство —`);
+  await saveRoom(r); room=r; render();
+}
+
+async function toPhase3Action(){
+  const r = await loadRoom(room.code);
+  if(!r || !r.electionResult || !r.electionResult.government) return;
+  r.phase=3;
+  r.proposedThisCycle=[]; r.cycleActions=[]; r.pendingAction=null; r.pendingPresidentialApproval=null;
+  rollLawsForCycle(r);
+  const parliamentParties = PARTY_KEYS.filter(k=>(r.electionResult.seats[k]||0)>0);
+  const govParties = r.electionResult.government;
+  const orderedParliament = r.players.filter(p=>parliamentParties.includes(p.party)).map(p=>p.party);
+  const orderedGov = r.players.filter(p=>govParties.includes(p.party)).map(p=>p.party);
+  const queue=[];
+  const maxLen = Math.max(orderedParliament.length, orderedGov.length);
+  for(let i=0;i<maxLen;i++){
+    if(orderedParliament[i]) queue.push({kind:'law', party:orderedParliament[i]});
+    if(orderedGov[i]) queue.push({kind:'reform', party:orderedGov[i]});
+  }
+  r.phase3Queue = queue;
+  r.phase3QueueIndex = 0;
+  r.log.push(`— Фаза 3: законы чередуются с реформами правительства —`);
+  await saveRoom(r); room=r; render();
+}
+
+async function proposeItemAction(kind, title){
+  const r = await loadRoom(room.code);
+  if(!r || r.pendingAction) return;
+  const item = r.phase3Queue[r.phase3QueueIndex];
+  if(!item || item.kind!==kind) return;
+  const meParty = (r.players.find(p=>p.id===me.id)||{}).party;
+  if(item.party !== meParty) return;
+  r.pendingAction = { kind, title, by:item.party, votes:{} };
+  const p = r.players.find(p=>p.id===me.id);
+  r.log.push(`${p.name} (${PARTIES[item.party].name}) выносит на голосование ${kind==='law'?'закон':'реформу'} «${title}»`);
+  selectedProposalTitle = null;
+  await saveRoom(r); room=r; render();
+}
+
+async function skipQueueItemAction(){
+  const r = await loadRoom(room.code);
+  if(!r || r.pendingAction) return;
+  const item = r.phase3Queue[r.phase3QueueIndex];
+  if(!item) return;
+  const meParty = (r.players.find(p=>p.id===me.id)||{}).party;
+  if(item.party !== meParty) return;
+  const p = r.players.find(p=>p.id===me.id);
+  r.log.push(`${p.name} (${PARTIES[item.party].name}) передал(а) ход без внесения`);
+  r.phase3QueueIndex += 1;
+  selectedProposalTitle = null;
+  await saveRoom(r); room=r; render();
+}
+
+async function castVoteAction(choice){
+  const r = await loadRoom(room.code);
+  if(!r || !r.pendingAction) return;
+  const p = r.players.find(p=>p.id===me.id);
+  if(!p) return;
+  const weightMap = r.pendingAction.kind==='reform' ? (r.electionResult.govSeats||{}) : r.electionResult.seats;
+  if(!(weightMap[p.party]>0)) return;
+  if(r.pendingAction.votes[p.id]!==undefined) return;
+  r.pendingAction.votes[p.id]=choice;
+  resolvePendingIfComplete(r);
+  await saveRoom(r); await applyRoomUpdate(r);
+}
+
+async function presidentialDecisionAction(approve){
+  const r = await loadRoom(room.code);
+  if(!r || !r.pendingPresidentialApproval) return;
+  const leaderParty = getLeaderParty(r);
+  const meParty = (r.players.find(p=>p.id===me.id)||{}).party;
+  if(leaderParty !== meParty) return;
+  applyPresidentialDecision(r, approve);
+  await saveRoom(r); room=r; render();
+}
+
+async function endCycleAction(){
+  const r = await loadRoom(room.code);
+  if(!r) return;
+  r.cycle+=1;
+  if(r.pendingSystemChange){
+    r.systemTypeKey = r.pendingSystemChange;
+    r.pendingSystemChange = null;
+    r.log.push(`— С цикла ${r.cycle} политическая система: ${SYSTEM_TYPES[r.systemTypeKey].label} —`);
+  }
+  drawAndApplyEvent(r);
+  updateTurnout(r);
+  rollReforms(r);
+  r.phase=1; r.passed=[];
+  r.firstMoveIndex = (r.firstMoveIndex||0) + 1;
+  r.turnOrder=rotatedTurnOrder(r); r.turnIndex=0;
+  r.support={};
+  r.players.forEach(p=>{
+    const oldHand = r.hands[p.id]||[];
+    const frozenIds = r.frozenCardIds[p.id]||[];
+    const kept = oldHand.filter(c=>frozenIds.includes(c.handId)).slice(0,3);
+    const fresh = dealHandN(HAND_SIZE-kept.length);
+    r.hands[p.id] = [...kept, ...fresh];
+    r.frozenCardIds[p.id] = [];
+    r.budgets[p.id]=(r.budgets[p.id]||0)+r.budgetPerCycle;
+    r.support[p.party]=0;
+  });
+  r.electionResult=null;
+  r.pendingAction=null; r.pendingPresidentialApproval=null;
+  r.phase3Queue=[]; r.phase3QueueIndex=0; r.proposedThisCycle=[]; r.cycleActions=[];
+  r.log.push(`— Цикл ${r.cycle} начался. На повестке: ${r.currentEvent}. Фаза 1: агитация. —`);
+  await saveRoom(r); room=r; render();
+}
+
+async function returnToLobbyAction(){
+  const r = await loadRoom(room.code);
+  if(!r) return;
+  r.status='lobby';
+  r.winners=null;
+  r.electionResult=null;
+  r.cycle=0; r.phase=1;
+  r.allPassedLaws=[]; r.passedHistory=[]; r.cycleActions=[]; r.proposedThisCycle=[];
+  r.reformBonus={}; r.pendingAction=null; r.pendingPresidentialApproval=null; r.pendingSystemChange=null;
+  r.availableReforms=[]; r.availableLaws=[]; r.cardHistory={}; r.frozenCardIds={};
+  r.currentEvent=null; r.currentEventDesc=null; r.lastPresident=null; r.governmentDismissedThisCycle=false;
+  r.players.forEach(p=>{ p.party=null; });
+  r.log.push(`— Возврат в лобби для новой партии —`);
+  await saveRoom(r); room=r; view='lobby'; render();
+}
+
+/* ============================== EVENTS ============================== */
+
+function bindAsync(el, fn){
+  if(!el) return;
+  el.onclick = async (e)=>{
+    if(el.disabled) return;
+    el.disabled = true;
+    try{ await fn(e); }
+    finally{ el.disabled = false; }
+  };
+}
+
+function attachHandlers(){
+  const createBtn=document.getElementById('createBtn');
+  bindAsync(createBtn, async ()=>{
+    const name=document.getElementById('hostName').value.trim();
+    const systemTypeKey=document.getElementById('scenarioSel').value;
+    const botCount=parseInt(document.getElementById('botCountSel').value,10)||0;
+    const botDifficulty=document.getElementById('botDifficultySel').value;
+    if(!name){ uiError='Введите имя'; render(); return; }
+    uiError=''; await createRoom(name, systemTypeKey, botCount, botDifficulty);
+  });
+  const joinBtn=document.getElementById('joinBtn');
+  bindAsync(joinBtn, async ()=>{
+    const name=document.getElementById('joinName').value.trim();
+    const code=document.getElementById('joinCode').value.trim();
+    if(!name||!code){ uiError='Введите имя и код комнаты'; render(); return; }
+    uiError=''; await joinRoom(name, code);
+  });
+  document.querySelectorAll('.standard').forEach(el=>{
+    bindAsync(el, async ()=>{ if(!el.classList.contains('taken')) await choosePartyAction(el.dataset.party); });
+  });
+  const startBtn=document.getElementById('startBtn');
+  bindAsync(startBtn, startGameAction);
+
+  const notesEl=document.getElementById('myNotes');
+  if(notesEl){ notesEl.value=myNotes; notesEl.oninput=(e)=>{ myNotes=e.target.value; }; }
+
+  document.querySelectorAll('.playcard').forEach(el=>{
+    el.onclick=()=>{ if(!el.classList.contains('disabled')) handleCardClick(el.dataset.play); };
+  });
+  document.querySelectorAll('.freeze-toggle').forEach(el=>{
+    bindAsync(el, async (e)=>{ e.stopPropagation(); await toggleFreezeAction(el.dataset.freeze); });
+  });
+  const passBtn=document.getElementById('passBtn');
+  bindAsync(passBtn, passAction);
+  const handOffBtn=document.getElementById('handOffBtn');
+  bindAsync(handOffBtn, handOffTurnAction);
+
+  document.querySelectorAll('[data-target]').forEach(el=>{
+    bindAsync(el, ()=>chooseDiscreditTarget(el.dataset.target));
+  });
+  const cancelDiscreditBtn=document.getElementById('cancelDiscreditBtn');
+  if(cancelDiscreditBtn) cancelDiscreditBtn.onclick=()=>{ discreditPicker=null; render(); };
+
+  const runPresBtn=document.getElementById('runPresBtn');
+  bindAsync(runPresBtn, runPresidentialElectionAction);
+
+  document.querySelectorAll('.gov-chip[data-invite]').forEach(el=>{
+    bindAsync(el, ()=>toggleInviteAction(el.dataset.invite));
+  });
+  document.querySelectorAll('[data-govinc]').forEach(el=>{
+    bindAsync(el, ()=>adjustGovSeatsAction(el.dataset.govinc, 1));
+  });
+  document.querySelectorAll('[data-govdec]').forEach(el=>{
+    bindAsync(el, ()=>adjustGovSeatsAction(el.dataset.govdec, -1));
+  });
+  document.querySelectorAll('[data-uninvite]').forEach(el=>{
+    bindAsync(el, ()=>removeInviteAction(el.dataset.uninvite));
+  });
+  const confirmGovBtn=document.getElementById('confirmGovBtn');
+  bindAsync(confirmGovBtn, confirmGovernmentAction);
+  const dismissGovBtn=document.getElementById('dismissGovBtn');
+  bindAsync(dismissGovBtn, dismissGovernmentAction);
+
+  const toPhase3Btn=document.getElementById('toPhase3Btn');
+  bindAsync(toPhase3Btn, toPhase3Action);
+
+  document.querySelectorAll('.proposal-row').forEach(el=>{
+    el.onclick=()=>{ selectedProposalTitle=el.dataset.choose; render(); };
+  });
+  const proposeItemBtn=document.getElementById('proposeItemBtn');
+  bindAsync(proposeItemBtn, async ()=>{
+    if(!selectedProposalTitle) return;
+    const item = room.phase3Queue[room.phase3QueueIndex];
+    if(item) await proposeItemAction(item.kind, selectedProposalTitle);
+  });
+  const skipQueueBtn=document.getElementById('skipQueueBtn');
+  bindAsync(skipQueueBtn, skipQueueItemAction);
+
+  document.querySelectorAll('.vote-buttons button[data-vote]').forEach(el=>{
+    bindAsync(el, ()=>castVoteAction(el.dataset.vote));
+  });
+
+  const signBtn=document.getElementById('signBtn');
+  bindAsync(signBtn, ()=>presidentialDecisionAction(true));
+  const vetoBtn=document.getElementById('vetoBtn');
+  bindAsync(vetoBtn, ()=>presidentialDecisionAction(false));
+
+  const endCycleBtn=document.getElementById('endCycleBtn');
+  bindAsync(endCycleBtn, endCycleAction);
+
+  const returnLobbyBtn=document.getElementById('returnLobbyBtn');
+  bindAsync(returnLobbyBtn, returnToLobbyAction);
+}
+
+render();
+</script>
+</body>
+</html>
