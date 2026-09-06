@@ -352,6 +352,8 @@
   .reveal-verdict.pass{color:#8fd18a;}
   .reveal-verdict.fail{color:#e07a72;}
 </style>
+<script src="https://www.gstatic.com/firebasejs/12.18.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.18.0/firebase-database-compat.js"></script>
 </head>
 <body>
 <div id="root"></div>
@@ -863,42 +865,45 @@ function checkVictory(r){
 }
 
 /* ============================== STORAGE ==============================
-   Room state is persisted through a small storage abstraction so this
-   file can run two ways:
 
-   1) Inside Anthropic's Claude.ai artifact viewer, `window.storage` is
-      injected automatically and provides real shared storage across
-      different users/devices viewing the same published artifact —
-      genuine cross-device multiplayer, no setup needed.
+// Вставьте сюда свой объект из Firebase (Project settings → General → Your apps)
+const firebaseConfig = {
+  apiKey: "AIzaSyDrDH6CsAkYeGlU7kcTWce9rOruLORuohQ",
+  authDomain: "politia11-fdd31.firebaseapp.com",
+  databaseURL: "https://politia11-fdd31-default-rtdb.firebaseio.com",
+  projectId: "politia11-fdd31",
+  storageBucket: "politia11-fdd31.firebasestorage.app",
+  messagingSenderId: "269222565144",
+  appId: "1:269222565144:web:b89582d900b023f3fcfa6d"
+};
 
-   2) Anywhere else (opened as a plain .html file, or hosted as a static
-      page e.g. on GitHub Pages), `window.storage` does not exist. This
-      falls back to the browser's own localStorage. localStorage is
-      PER-BROWSER ONLY, so in this mode "multiplayer" only works across
-      multiple tabs/windows on the SAME device (handy for solo/hotseat
-      testing), not across separate devices.
-
-   To get real cross-device multiplayer on a static host like GitHub
-   Pages, replace storageGet/storageSet below with calls to a small
-   backend of your choice (Firebase Realtime Database, Supabase, a tiny
-   REST API you write, etc.) that stores/retrieves a string value by key.
-   Nothing else in the file needs to change — loadRoom/saveRoom below are
-   the only two functions that call these.
-================================================================== */
+let fbDb = null;
+if(typeof firebase !== 'undefined' && firebaseConfig.apiKey && firebaseConfig.apiKey.indexOf('ВАШ_')!==0){
+  firebase.initializeApp(firebaseConfig);
+  fbDb = firebase.database();
+}
 
 const HAS_CLAUDE_STORAGE = (typeof window!=='undefined' && window.storage
   && typeof window.storage.get==='function' && typeof window.storage.set==='function');
 
 async function storageGet(key){
   if(HAS_CLAUDE_STORAGE){
-    try{ const r = await window.storage.get(key, true); return r ? r.value : null; }
-    catch(e){ return null; }
+    try{ const r = await window.storage.get(key, true); return r ? r.value : null; }catch(e){ return null; }
+  }
+  if(fbDb){
+    try{
+      const snap = await fbDb.ref(key.replace(/:/g,'/')).get();
+      return snap.exists() ? snap.val() : null;
+    }catch(e){ return null; }
   }
   try{ return localStorage.getItem('politia:'+key); }catch(e){ return null; }
 }
 async function storageSet(key, value){
   if(HAS_CLAUDE_STORAGE){
     try{ await window.storage.set(key, value, true); return; }catch(e){ return; }
+  }
+  if(fbDb){
+    try{ await fbDb.ref(key.replace(/:/g,'/')).set(value); return; }catch(e){ return; }
   }
   try{ localStorage.setItem('politia:'+key, value); }catch(e){ /* ignore quota/availability errors */ }
 }
@@ -912,7 +917,6 @@ async function loadRoom(code){
 async function saveRoom(state){
   await storageSet('room:'+state.code, JSON.stringify(state));
 }
-
 /* ============================== APP STATE ============================== */
 
 let me = { id: uid(), name:'', roomCode:'' };
@@ -957,7 +961,7 @@ function render(){
 /* ---------- LANDING ---------- */
 function renderLanding(){
   return `
-    ${!HAS_CLAUDE_STORAGE ? `<div class="plaque error-plaque"><b>Автономный режим:</b> общее хранилище Claude недоступно, поэтому комната сохраняется только в этом браузере (localStorage). Несколько вкладок на одном устройстве видят одну комнату — подойдёт для тестирования в одиночку или хотсит. Для игры между разными устройствами подключите свой бэкенд — см. комментарий у функций storageGet/storageSet в коде.</div>` : ''}
+    ${(!HAS_CLAUDE_STORAGE && !fbDb) ? `<div class="plaque error-plaque"><b>Автономный режим:</b> общее хранилище Claude недоступно, поэтому комната сохраняется только в этом браузере (localStorage). Несколько вкладок на одном устройстве видят одну комнату — подойдёт для тестирования в одиночку или хотсит. Для игры между разными устройствами подключите свой бэкенд — см. комментарий у функций storageGet/storageSet в коде.</div>` : ''}
     <div class="plaque">
       <h2 class="section-title">Создать комнату</h2>
       <div class="row">
